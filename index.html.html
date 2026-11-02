@@ -1,0 +1,3036 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistema de Citas — DOP · FCFM-UANL</title>
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.9/babel.min.js"></script>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>body{margin:0;}</style>
+</head>
+<body>
+  <div id="root"></div>
+  <script>
+    // ══════════════════════════════════════════════════════════════
+    // FIREBASE CONFIG - REEMPLAZA CON TUS DATOS DE FIREBASE
+    // ══════════════════════════════════════════════════════════════
+    var firebaseConfig = {
+      apiKey: "AIzaSyClRhm1LInOb60_SM-7PlE_5FHrQqO2ZPo",
+      authDomain: "dop-citas.firebaseapp.com",
+      projectId: "dop-citas",
+      storageBucket: "dop-citas.firebasestorage.app",
+      messagingSenderId: "541943610442",
+      appId: "1:541943610442:web:5dabc388faf241c02efab3"
+    };
+    try {
+      firebase.initializeApp(firebaseConfig);
+      window._firestoreDb = firebase.firestore();
+    } catch(e) {
+      console.warn("Firebase init failed:", e);
+      window._firestoreDb = null;
+    }
+  </script>
+  <script type="text/babel">
+const { useState, useEffect, useCallback, useMemo, useRef } = React;
+
+const DAYS = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes"];
+const HOURS = [
+  "7:00","8:00","9:00","10:00","11:00","12:00",
+  "13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00"
+];
+const MAX_OFICINAS = 2;
+
+const PRAC_COLORS = {
+  "ivana": { bg: "#9B59B6", text: "#fff" },
+  "emilio": { bg: "#2E7D32", text: "#fff" },
+  "arely": { bg: "#90EE90", text: "#000" },
+  "fernanda": { bg: "#FF8C00", text: "#fff" },
+  "camila": { bg: "#FF69B4", text: "#fff" },
+  "andrea": { bg: "#E53935", text: "#fff" },
+  "estefania": { bg: "#87CEEB", text: "#000" },
+  "karla": { bg: "#DAA520", text: "#fff" }
+};
+
+function getInitials(name) {
+  return name.split(" ").filter(function(w) { return w.length > 0; }).map(function(w) { return w[0]; }).join("").toUpperCase();
+}
+
+function getSessionLabel(firstDate, targetDate, reagendadas, asuetoDates) {
+  var first = new Date(firstDate + "T12:00:00");
+  var target = new Date(targetDate + "T12:00:00");
+  var diff = Math.round((target - first) / (7 * 24 * 60 * 60 * 1000));
+  if (isNaN(diff) || diff < 0) return "PRE";
+  var reag = parseInt(reagendadas) || 0;
+  var asuSkip = 0;
+  if (asuetoDates && asuetoDates.length > 0) {
+    var dayOfWeek = first.getDay();
+    asuetoDates.forEach(function(ad) {
+      var aDate = new Date(ad + "T12:00:00");
+      if (aDate.getDay() === dayOfWeek && aDate >= first && aDate < target) {
+        asuSkip++;
+      }
+    });
+  }
+  var adjusted = diff - reag - asuSkip;
+  if (isNaN(adjusted) || adjusted <= 0) return "PRE";
+  return "S" + adjusted;
+}
+
+function getWeekDates(mondayStr) {
+  var dates = [];
+  var d = new Date(mondayStr + "T12:00:00");
+  for (var i = 0; i < 5; i++) {
+    dates.push(d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0"));
+    d.setDate(d.getDate() + 1);
+  }
+  return dates;
+}
+const CARRERAS = [
+  "Licenciatura en Matemáticas",
+  "Licenciatura en Física",
+  "Licenciatura en Ciencias Computacionales",
+  "Licenciatura en Actuaría",
+  "Licenciatura en Multimedia y Animación Digital",
+  "Licenciatura en Seguridad en Tecnologías de la Información",
+  "Ingeniería en Ciberseguridad",
+  "POSGRADO"
+];
+const KEY = "dop-citas-v4";
+const DAY_MAP = { 0:"Domingo", 1:"Lunes", 2:"Martes", 3:"Miércoles", 4:"Jueves", 5:"Viernes", 6:"Sábado" };
+const MONTH_NAMES = ["enero","febrero","marzo","abril","mayo","junio","julio","agosto","septiembre","octubre","noviembre","diciembre"];
+
+function uid() {
+  return Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
+}
+
+function dateToDay(d) {
+  return DAY_MAP[new Date(d + "T12:00:00").getDay()];
+}
+
+function fmtDateES(d) {
+  if (!d) return "";
+  const x = new Date(d + "T12:00:00");
+  return DAY_MAP[x.getDay()] + " " + x.getDate();
+}
+
+function fmtH12(h) {
+  const n = parseInt(h);
+  if (n >= 13) return (n - 12) + ":00pm";
+  if (n === 12) return "12:00pm";
+  return n + ":00am";
+}
+
+function toggleSlot(s, day, hour) {
+  const o = { ...s };
+  if (!o[day]) o[day] = [];
+  if (o[day].includes(hour)) {
+    o[day] = o[day].filter(function(h) { return h !== hour; });
+  } else {
+    o[day] = [...o[day], hour].sort(function(a, b) { return parseInt(a) - parseInt(b); });
+  }
+  if (o[day].length === 0) delete o[day];
+  return o;
+}
+
+const INIT_PRACS = [
+  { id: "karla", name: "Psic. Karla Mitzary Aguilar Reyes", schedule: {
+    "Lunes": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+    "Martes": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+    "Miércoles": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+    "Jueves": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+    "Viernes": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"]
+  }, propiaOficina: true },
+  { id: "arely", name: "Arely", schedule: {} },
+  { id: "andrea", name: "Andrea", schedule: {} },
+  { id: "emilio", name: "Emilio", schedule: {} },
+  { id: "ivana", name: "Ivana", schedule: {} },
+  { id: "camila", name: "Camila", schedule: {} },
+  { id: "fernanda", name: "Fernanda", schedule: {} },
+  { id: "estefania", name: "Estefanía", schedule: {} }
+];
+
+const INIT_BLOQUEOS = [
+  { id: "t01", type: "taller", name: "Métodos de Org. y Estudio", session: "Gpo1-S1", date: "2026-08-12", hour: "11:00", pIds: ["arely","ivana"] },
+  { id: "t02", type: "taller", name: "Métodos de Org. y Estudio", session: "Gpo1-S2", date: "2026-08-18", hour: "11:00", pIds: ["arely","andrea","emilio"] },
+  { id: "t05", type: "taller", name: "Manejo del Estrés", session: "Gpo1-S1", date: "2026-08-27", hour: "11:00", pIds: ["andrea"] },
+  { id: "t06", type: "taller", name: "Manejo del Estrés", session: "Gpo1-S2", date: "2026-09-01", hour: "11:00", pIds: ["arely","emilio"] },
+  { id: "t09", type: "taller", name: "Inteligencia Emocional", session: "Gpo1-S1", date: "2026-09-10", hour: "11:00", pIds: ["andrea"] },
+  { id: "t10", type: "taller", name: "Inteligencia Emocional", session: "Gpo1-S2", date: "2026-09-14", hour: "11:00", pIds: ["arely","camila","fernanda"] },
+  { id: "t13", type: "taller", name: "Ansiedad", session: "Gpo1-S1", date: "2026-09-22", hour: "11:00", pIds: ["arely","andrea","emilio"] },
+  { id: "t15", type: "taller", name: "Depresión", session: "Gpo1-S1", date: "2026-10-13", hour: "11:00", pIds: ["arely","andrea","emilio"] },
+  { id: "t17", type: "taller", name: "Duelo", session: "Gpo1-S1", date: "2026-10-20", hour: "11:00", pIds: ["arely","andrea","emilio"] },
+  { id: "t19", type: "taller", name: "Amor Propio y Autoestima", session: "Gpo1-S1", date: "2026-10-27", hour: "11:00", pIds: ["arely","andrea","emilio"] },
+  { id: "t03", type: "taller", name: "Métodos de Org. y Estudio", session: "Gpo2-S1", date: "2026-08-13", hour: "14:00", pIds: ["karla"] },
+  { id: "t04", type: "taller", name: "Métodos de Org. y Estudio", session: "Gpo2-S2", date: "2026-08-20", hour: "14:00", pIds: ["karla"] },
+  { id: "t07", type: "taller", name: "Manejo del Estrés", session: "Gpo2-S1", date: "2026-08-27", hour: "14:00", pIds: ["karla"] },
+  { id: "t08", type: "taller", name: "Manejo del Estrés", session: "Gpo2-S2", date: "2026-09-03", hour: "14:00", pIds: ["karla"] },
+  { id: "t11", type: "taller", name: "Inteligencia Emocional", session: "Gpo2-S1", date: "2026-09-10", hour: "14:00", pIds: ["karla"] },
+  { id: "t12", type: "taller", name: "Inteligencia Emocional", session: "Gpo2-S2", date: "2026-09-17", hour: "14:00", pIds: ["karla"] },
+  { id: "t14", type: "taller", name: "Ansiedad", session: "Gpo2-S1", date: "2026-09-24", hour: "14:00", pIds: ["karla"] },
+  { id: "t16", type: "taller", name: "Depresión", session: "Gpo2-S1", date: "2026-10-15", hour: "14:00", pIds: ["karla"] },
+  { id: "t18", type: "taller", name: "Duelo", session: "Gpo2-S1", date: "2026-10-22", hour: "14:00", pIds: ["karla"] },
+  { id: "t20", type: "taller", name: "Amor Propio y Autoestima", session: "Gpo2-S1", date: "2026-10-29", hour: "14:00", pIds: ["karla"] },
+  { id: "m01", type: "mentoria", name: "Sesión Bienestar Integral", session: "S6", date: "2026-08-10", hour: "9:00", pIds: ["arely","karla"] },
+  { id: "m02", type: "mentoria", name: "Sesión Bienestar Integral", session: "S6", date: "2026-08-10", hour: "10:00", pIds: ["arely","karla"] },
+  { id: "m03", type: "mentoria", name: "Sesión Bienestar Integral", session: "S6", date: "2026-08-10", hour: "13:00", pIds: ["estefania"] },
+  { id: "m04", type: "mentoria", name: "Sesión Bienestar Integral", session: "S6", date: "2026-08-10", hour: "14:00", pIds: ["camila","fernanda"] },
+  { id: "m05", type: "mentoria", name: "Sesión Bienestar Integral", session: "S6", date: "2026-08-10", hour: "15:00", pIds: ["emilio","ivana"] },
+  { id: "m06", type: "mentoria", name: "Sesión Bienestar Integral", session: "S7", date: "2026-08-11", hour: "9:00", pIds: ["andrea","arely"] },
+  { id: "m07", type: "mentoria", name: "Sesión Bienestar Integral", session: "S7", date: "2026-08-11", hour: "10:00", pIds: ["andrea","arely"] },
+  { id: "m08", type: "mentoria", name: "Sesión Bienestar Integral", session: "S7", date: "2026-08-11", hour: "15:00", pIds: ["emilio"] },
+  { id: "m09", type: "mentoria", name: "Sesión Bienestar Integral", session: "S8", date: "2026-08-12", hour: "10:00", pIds: ["arely"] },
+  { id: "m10", type: "mentoria", name: "Sesión Bienestar Integral", session: "S9", date: "2026-08-13", hour: "10:00", pIds: ["andrea","karla"] }
+];
+
+/* ── SHA-256 + Password Gate ── */
+
+async function sha256(msg) {
+  var buf = new TextEncoder().encode(msg);
+  var hash = await crypto.subtle.digest("SHA-256", buf);
+  return Array.from(new Uint8Array(hash)).map(function(b) { return b.toString(16).padStart(2, "0"); }).join("");
+}
+
+function PasswordGate({ children }) {
+  const [authed, setAuthed] = useState(false);
+  const [pw, setPw] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [error, setError] = useState("");
+  const [isSetup, setIsSetup] = useState(null);
+  const [checking, setChecking] = useState(true);
+
+  useEffect(function() {
+    try {
+      if (sessionStorage.getItem("dop-auth") === "ok") {
+        setAuthed(true);
+        setChecking(false);
+        return;
+      }
+    } catch(e) {}
+
+    if (window._firestoreDb) {
+      window._firestoreDb.doc("config/auth").get().then(function(snap) {
+        if (snap.exists && snap.data().hash) {
+          setIsSetup(true);
+        } else {
+          setIsSetup(false);
+        }
+        setChecking(false);
+      }).catch(function() {
+        setIsSetup(false);
+        setChecking(false);
+      });
+    } else {
+      try {
+        var h = localStorage.getItem("dop-pw-hash");
+        setIsSetup(!!h);
+      } catch(e) { setIsSetup(false); }
+      setChecking(false);
+    }
+  }, []);
+
+  async function handleLogin(e) {
+    e.preventDefault();
+    setError("");
+    var hash = await sha256(pw);
+
+    if (window._firestoreDb) {
+      try {
+        var snap = await window._firestoreDb.doc("config/auth").get();
+        if (snap.exists && snap.data().hash === hash) {
+          setAuthed(true);
+          try { sessionStorage.setItem("dop-auth", "ok"); } catch(x) {}
+        } else {
+          setError("Contrase\u00f1a incorrecta");
+        }
+      } catch(ex) {
+        setError("Error de conexi\u00f3n: " + ex.message);
+      }
+    } else {
+      try {
+        var stored = localStorage.getItem("dop-pw-hash");
+        if (stored === hash) {
+          setAuthed(true);
+          try { sessionStorage.setItem("dop-auth", "ok"); } catch(x) {}
+        } else {
+          setError("Contrase\u00f1a incorrecta");
+        }
+      } catch(ex) {
+        setError("Error: " + ex.message);
+      }
+    }
+  }
+
+  async function handleSetup(e) {
+    e.preventDefault();
+    setError("");
+    if (pw.length < 4) { setError("M\u00ednimo 4 caracteres"); return; }
+    if (pw !== pw2) { setError("Las contrase\u00f1as no coinciden"); return; }
+    var hash = await sha256(pw);
+
+    if (window._firestoreDb) {
+      try {
+        await window._firestoreDb.doc("config/auth").set({ hash: hash });
+        setAuthed(true);
+        try { sessionStorage.setItem("dop-auth", "ok"); } catch(x) {}
+      } catch(ex) {
+        setError("Error al guardar: " + ex.message);
+      }
+    } else {
+      try {
+        localStorage.setItem("dop-pw-hash", hash);
+        setAuthed(true);
+        try { sessionStorage.setItem("dop-auth", "ok"); } catch(x) {}
+      } catch(ex) {
+        setError("Error: " + ex.message);
+      }
+    }
+  }
+
+  if (authed) return children;
+
+  if (checking) {
+    return (
+      <div className="min-h-screen flex items-center justify-center" style={{ background: "linear-gradient(135deg, #1F2A5C, #2d3a7c)" }}>
+        <p className="text-white text-lg">Cargando...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="min-h-screen flex items-center justify-center p-4" style={{ background: "linear-gradient(135deg, #1F2A5C, #2d3a7c)" }}>
+      <div className="bg-white rounded-2xl shadow-2xl max-w-sm w-full p-8">
+        <div className="text-center mb-6">
+          <div className="w-16 h-16 mx-auto mb-3 rounded-full flex items-center justify-center" style={{ background: "#1F2A5C" }}>
+            <span className="text-white text-2xl">{isSetup ? "\uD83D\uDD12" : "\uD83D\uDD11"}</span>
+          </div>
+          <h2 className="text-xl font-bold" style={{ color: "#1F2A5C" }}>Sistema de Citas DOP</h2>
+          <p className="text-sm text-gray-500 mt-1">
+            {isSetup ? "Ingresa tu contrase\u00f1a para acceder" : "Crea una contrase\u00f1a para proteger el sistema"}
+          </p>
+        </div>
+        <form onSubmit={isSetup ? handleLogin : handleSetup}>
+          <input type="password" value={pw} onChange={function(e) { setPw(e.target.value); }}
+            className="w-full border border-gray-300 rounded-lg p-3 mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder={isSetup ? "Contrase\u00f1a" : "Nueva contrase\u00f1a"} autoFocus />
+          {!isSetup && (
+            <input type="password" value={pw2} onChange={function(e) { setPw2(e.target.value); }}
+              className="w-full border border-gray-300 rounded-lg p-3 mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+              placeholder="Confirmar contrase\u00f1a" />
+          )}
+          {error && <p className="text-red-500 text-sm mb-3 text-center">{error}</p>}
+          <button type="submit"
+            className="w-full text-white rounded-lg p-3 font-semibold text-sm cursor-pointer hover:opacity-90 transition"
+            style={{ background: "#1F2A5C" }}>
+            {isSetup ? "Entrar" : "Crear contrase\u00f1a y entrar"}
+          </button>
+        </form>
+        <p className="text-xs text-gray-400 text-center mt-4">FCFM-UANL · Departamento de Orientaci\u00f3n Psicopedag\u00f3gica</p>
+      </div>
+    </div>
+  );
+}
+
+/* ── Reusable Components ── */
+
+function Modal({ open, onClose, title, children, wide }) {
+  if (!open) return null;
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/40 p-2 pt-8 overflow-y-auto" onClick={onClose}>
+      <div
+        className={"bg-white rounded-xl shadow-2xl w-full mb-8 " + (wide ? "max-w-4xl" : "max-w-lg")}
+        onClick={function(e) { e.stopPropagation(); }}
+      >
+        <div className="flex items-center justify-between px-5 py-3 border-b border-gray-200">
+          <h3 className="font-bold text-base" style={{ color: "#1F2A5C" }}>{title}</h3>
+          <button onClick={onClose} className="text-gray-400 hover:text-gray-600 text-2xl leading-none cursor-pointer">×</button>
+        </div>
+        <div className="p-4">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function Toast({ msg, onDone }) {
+  useEffect(function() {
+    if (msg) {
+      const t = setTimeout(onDone, 2200);
+      return function() { clearTimeout(t); };
+    }
+  }, [msg, onDone]);
+  if (!msg) return null;
+  return (
+    <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-emerald-600 text-white px-5 py-3 rounded-lg shadow-lg text-sm font-medium">
+      {msg}
+    </div>
+  );
+}
+
+function copyText(text) {
+  try {
+    var textarea = document.createElement("textarea");
+    textarea.value = text;
+    textarea.style.position = "fixed";
+    textarea.style.left = "-9999px";
+    textarea.style.top = "-9999px";
+    textarea.style.opacity = "0";
+    document.body.appendChild(textarea);
+    textarea.focus();
+    textarea.select();
+    document.execCommand("copy");
+    document.body.removeChild(textarea);
+    return true;
+  } catch (e) {
+    try {
+      navigator.clipboard.writeText(text);
+      return true;
+    } catch (e2) {
+      return false;
+    }
+  }
+}
+
+function CopyBtn({ text, label }) {
+  const [ok, setOk] = useState(false);
+  const btnLabel = label || "Copiar";
+  function handleCopy() {
+    var success = copyText(text);
+    if (success) {
+      setOk(true);
+      setTimeout(function() { setOk(false); }, 1500);
+    }
+  }
+  return (
+    <button
+      onClick={handleCopy}
+      className="px-3 py-1.5 rounded text-xs font-medium cursor-pointer shrink-0 text-white"
+      style={{ background: ok ? "#059669" : "#1F2A5C" }}
+    >
+      {ok ? "✓ Copiado" : btnLabel}
+    </button>
+  );
+}
+
+function ConfirmBtn({ onConfirm, label, confirmLabel }) {
+  const [pending, setPending] = useState(false);
+  useEffect(function() {
+    if (pending) {
+      var t = setTimeout(function() { setPending(false); }, 3000);
+      return function() { clearTimeout(t); };
+    }
+  }, [pending]);
+  function handleClick() {
+    if (pending) {
+      setPending(false);
+      onConfirm();
+    } else {
+      setPending(true);
+    }
+  }
+  return (
+    <button
+      onClick={handleClick}
+      className={"px-3 py-1.5 text-xs rounded border cursor-pointer " + (pending ? "border-red-500 bg-red-500 text-white" : "border-red-200 text-red-600 hover:bg-red-50")}
+    >
+      {pending ? (confirmLabel || "¿Seguro?") : label}
+    </button>
+  );
+}
+
+function ScheduleGrid({ selected, onToggle }) {
+  const sel = selected || {};
+  return (
+    <div className="overflow-x-auto">
+      <table className="border-collapse w-full" style={{ minWidth: 280, fontSize: 10 }}>
+        <thead>
+          <tr>
+            <th className="p-0.5 border border-gray-300 bg-gray-50" style={{ width: 40 }}></th>
+            {DAYS.map(function(d) {
+              return <th key={d} className="p-0.5 border border-gray-300 text-center bg-gray-50 font-semibold" style={{ minWidth: 36 }}>{d.slice(0, 3)}</th>;
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {HOURS.map(function(h) {
+            return (
+              <tr key={h}>
+                <td className="p-0.5 border border-gray-300 text-right font-mono bg-gray-50 text-gray-500">{fmtH12(h)}</td>
+                {DAYS.map(function(d) {
+                  const on = sel[d] && sel[d].includes(h);
+                  return (
+                    <td key={d} className="border border-gray-300 p-0">
+                      <button
+                        onClick={function() { onToggle(d, h); }}
+                        className={"w-full cursor-pointer " + (on ? "bg-blue-500 hover:bg-blue-400" : "bg-white hover:bg-gray-100")}
+                        style={{ height: 16 }}
+                      ></button>
+                    </td>
+                  );
+                })}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+/* ── PRACTICANTES ── */
+
+function PracticantesTab({ data, onSave, toast }) {
+  const [editing, setEditing] = useState(null);
+  const [formName, setFormName] = useState("");
+  const [formSched, setFormSched] = useState({});
+
+  function openNew() {
+    setFormName("");
+    setFormSched({});
+    setEditing("new");
+  }
+
+  function openEdit(p) {
+    setFormName(p.name);
+    setFormSched(p.schedule || {});
+    setEditing(p.id);
+  }
+
+  function save() {
+    if (!formName.trim()) return;
+    var entry = { id: editing === "new" ? uid() : editing, name: formName.trim(), schedule: formSched };
+    var ps;
+    if (editing === "new") {
+      ps = data.practicantes.concat([entry]);
+    } else {
+      ps = data.practicantes.map(function(p) { return p.id === editing ? entry : p; });
+    }
+    onSave({ ...data, practicantes: ps });
+    toast("Practicante guardado");
+    setEditing(null);
+  }
+
+  function remove(id) {
+
+    onSave({
+      ...data,
+      practicantes: data.practicantes.filter(function(p) { return p.id !== id; }),
+      citas: data.citas.map(function(c) { return c.practicanteId === id ? { ...c, active: false } : c; })
+    });
+    toast("Eliminado");
+  }
+
+  function totalH(s) {
+    return Object.values(s || {}).reduce(function(a, b) { return a + b.length; }, 0);
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4">
+        <p className="text-sm text-gray-500">{data.practicantes.length} practicantes</p>
+        <button onClick={openNew} className="px-4 py-2 rounded-lg text-white font-medium text-sm cursor-pointer" style={{ background: "#1F2A5C" }}>+ Agregar</button>
+      </div>
+
+      {data.practicantes.length === 0 && (
+        <div className="text-center py-14 text-gray-400">
+          <p className="text-3xl mb-2">👥</p>
+          <p>No hay practicantes.</p>
+        </div>
+      )}
+
+      {data.practicantes.map(function(p) {
+        var citasCount = data.citas.filter(function(c) { return c.practicanteId === p.id && c.active; }).length;
+        return (
+          <div key={p.id} className="border border-gray-200 rounded-lg p-3 mb-2 flex items-center justify-between hover:border-gray-300">
+            <div>
+              <p className="font-semibold text-sm" style={{ color: "#1F2A5C" }}>{p.name}{p.propiaOficina ? <span className="ml-2 text-xs font-normal text-purple-600">★ Oficina propia</span> : ""}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{totalH(p.schedule)} hrs/sem · {citasCount} cita(s)</p>
+            </div>
+            <div className="flex gap-2">
+              <button onClick={function() { openEdit(p); }} className="px-3 py-1.5 text-xs rounded border border-gray-300 hover:bg-gray-50 cursor-pointer">Editar</button>
+              <ConfirmBtn onConfirm={function() { remove(p.id); }} label="Eliminar" />
+            </div>
+          </div>
+        );
+      })}
+
+      <Modal open={editing !== null} onClose={function() { setEditing(null); }} title={editing === "new" ? "Nuevo practicante" : "Editar practicante"} wide={true}>
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nombre</label>
+            <input value={formName} onChange={function(e) { setFormName(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Horario de prácticas</label>
+            <p className="text-xs text-gray-500 mb-2">Marca las horas en que puede atender pacientes.</p>
+            <ScheduleGrid selected={formSched} onToggle={function(d, h) { setFormSched(toggleSlot(formSched, d, h)); }} />
+          </div>
+          <div className="flex justify-end gap-3 pt-3 border-t">
+            <button onClick={function() { setEditing(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+            <button onClick={save} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Guardar</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/* ── ALUMNOS ── */
+
+function AlumnosTab({ data, onSave, toast }) {
+  const [editing, setEditing] = useState(null);
+  const [fn, setFn] = useState("");
+  const [fm, setFm] = useState("");
+  const [fc, setFc] = useState("");
+  const [fmot, setFmot] = useState("");
+  const [fclases, setFclases] = useState({});
+  const [fOnline, setFOnline] = useState(false);
+  const [search, setSearch] = useState("");
+
+  function openNew() { setFn(""); setFm(""); setFc(""); setFmot(""); setFclases({}); setFOnline(false); setEditing("new"); }
+  function openEdit(a) { setFn(a.name); setFm(a.matricula); setFc(a.carrera); setFmot(a.motivoConsulta); setFclases(a.clases || {}); setFOnline(!!a.enLinea); setEditing(a.id); }
+
+  function save() {
+    if (!fn.trim() || !fm.trim()) return;
+    var entry = { id: editing === "new" ? uid() : editing, name: fn.trim(), matricula: fm.trim(), carrera: fc, motivoConsulta: fmot.trim(), clases: fclases, enLinea: fOnline };
+    var als = editing === "new" ? data.alumnos.concat([entry]) : data.alumnos.map(function(a) { return a.id === editing ? entry : a; });
+    onSave({ ...data, alumnos: als });
+    toast("Alumno guardado");
+    setEditing(null);
+  }
+
+  function remove(id) {
+
+    onSave({
+      ...data,
+      alumnos: data.alumnos.filter(function(a) { return a.id !== id; }),
+      citas: data.citas.map(function(c) { return c.alumnoId === id ? { ...c, active: false } : c; })
+    });
+    toast("Eliminado");
+  }
+
+  var filtered = data.alumnos.filter(function(a) {
+    var q = search.toLowerCase();
+    if (!q) return true;
+    return a.name.toLowerCase().includes(q) || a.matricula.includes(q) || a.carrera.toLowerCase().includes(q);
+  });
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <input value={search} onChange={function(e) { setSearch(e.target.value); }} placeholder="Buscar..." className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-[180px]" />
+        <button onClick={openNew} className="px-4 py-2 rounded-lg text-white font-medium text-sm cursor-pointer whitespace-nowrap" style={{ background: "#1F2A5C" }}>+ Agregar alumno</button>
+      </div>
+
+      {filtered.length === 0 && (
+        <div className="text-center py-14 text-gray-400">
+          <p className="text-3xl mb-2">🎓</p>
+          <p>{search ? "Sin resultados" : "No hay alumnos."}</p>
+        </div>
+      )}
+
+      {filtered.map(function(a) {
+        var cita = data.citas.find(function(c) { return c.alumnoId === a.id && c.active; });
+        var sinCupoMsg = genSinCupoMsg(a.name);
+        return (
+          <div key={a.id} className="border border-gray-200 rounded-lg p-3 mb-2 flex items-center justify-between hover:border-gray-300">
+            <div className="min-w-0">
+              <p className="font-semibold text-sm truncate" style={{ color: "#1F2A5C" }}>{a.name}</p>
+              <p className="text-xs text-gray-500">{a.matricula} · {a.carrera}{a.motivoConsulta ? " · " + a.motivoConsulta : ""}{a.enLinea ? " · 💻 En línea" : ""}</p>
+              {cita && <p className="text-xs text-green-600 mt-0.5">{"✓ " + cita.day + " " + fmtH12(cita.hour)}</p>}
+              {!cita && <p className="text-xs text-orange-500 mt-0.5">Sin cita asignada</p>}
+            </div>
+            <div className="flex gap-2 ml-2 shrink-0">
+              {!cita && <CopyBtn text={sinCupoMsg} label="Sin cupo" />}
+              <button onClick={function() { openEdit(a); }} className="px-3 py-1.5 text-xs rounded border border-gray-300 hover:bg-gray-50 cursor-pointer">Editar</button>
+              <ConfirmBtn onConfirm={function() { remove(a.id); }} label="Eliminar" />
+            </div>
+          </div>
+        );
+      })}
+
+      <Modal open={editing !== null} onClose={function() { setEditing(null); }} title={editing === "new" ? "Nuevo alumno" : "Editar alumno"} wide={true}>
+        <div className="space-y-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Nombre completo *</label>
+              <input value={fn} onChange={function(e) { setFn(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Matrícula *</label>
+              <input value={fm} onChange={function(e) { setFm(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Carrera</label>
+              <select value={fc} onChange={function(e) { setFc(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                <option value="">Seleccionar...</option>
+                {CARRERAS.map(function(c) { return <option key={c} value={c}>{c}</option>; })}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Motivo de consulta</label>
+              <input value={fmot} onChange={function(e) { setFmot(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <input type="checkbox" id="chkOnline" checked={fOnline} onChange={function(e) { setFOnline(e.target.checked); }} className="w-4 h-4 rounded border-gray-300" />
+            <label htmlFor="chkOnline" className="text-sm font-medium text-gray-700">💻 Servicio en línea</label>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Horario de clases</label>
+            <p className="text-xs text-gray-500 mb-2">Marca las horas en que tiene clase.</p>
+            <ScheduleGrid selected={fclases} onToggle={function(d, h) { setFclases(toggleSlot(fclases, d, h)); }} />
+          </div>
+          <div className="flex justify-end gap-3 pt-3 border-t">
+            <button onClick={function() { setEditing(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+            <button onClick={save} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Guardar</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+/* ── BLOQUEOS ── */
+
+function BloqueosTab({ data, onSave, toast }) {
+  const [adding, setAdding] = useState(false);
+  const [bType, setBType] = useState("taller");
+  const [bName, setBName] = useState("");
+  const [bSession, setBSession] = useState("");
+  const [bDate, setBDate] = useState("");
+  const [bHour, setBHour] = useState("11:00");
+  const [bPIds, setBPIds] = useState([]);
+  const [filter, setFilter] = useState("todos");
+
+  /* Asuetos */
+  const [addingAsueto, setAddingAsueto] = useState(false);
+  const [aName, setAName] = useState("");
+  const [aDate, setADate] = useState("");
+
+  var asuetos = data.asuetos || [];
+
+  function openAdd() {
+    setBType("taller"); setBName(""); setBSession(""); setBDate(""); setBHour("11:00"); setBPIds([]);
+    setAdding(true);
+  }
+
+  function saveB() {
+    if (!bDate || bPIds.length === 0) return;
+    var entry = { id: uid(), type: bType, name: bName.trim() || "Sin nombre", session: bSession, date: bDate, hour: bHour, pIds: bPIds.slice() };
+    onSave({ ...data, bloqueos: data.bloqueos.concat([entry]) });
+    toast("Bloqueo agregado");
+    setAdding(false);
+  }
+
+  function saveAsueto() {
+    if (!aDate || !aName.trim()) return;
+    var entry = { id: uid(), date: aDate, name: aName.trim() };
+    onSave({ ...data, asuetos: asuetos.concat([entry]) });
+    toast("Asueto agregado");
+    setAddingAsueto(false);
+    setAName(""); setADate("");
+  }
+
+  function removeB(id) {
+    onSave({ ...data, bloqueos: data.bloqueos.filter(function(b) { return b.id !== id; }) });
+    toast("Eliminado");
+  }
+
+  function removeAsueto(id) {
+    onSave({ ...data, asuetos: asuetos.filter(function(a) { return a.id !== id; }) });
+    toast("Asueto eliminado");
+  }
+
+  function togglePrac(pid) {
+    if (bPIds.includes(pid)) {
+      setBPIds(bPIds.filter(function(x) { return x !== pid; }));
+    } else {
+      setBPIds(bPIds.concat([pid]));
+    }
+  }
+
+  var shown = data.bloqueos.filter(function(b) {
+    if (filter === "todos") return true;
+    return b.type === filter;
+  }).sort(function(a, b) { return a.date.localeCompare(b.date); });
+
+  var tallerCount = data.bloqueos.filter(function(b) { return b.type === "taller"; }).length;
+  var mentoriaCount = data.bloqueos.filter(function(b) { return b.type === "mentoria"; }).length;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+          {[["todos", "Todos (" + data.bloqueos.length + ")"], ["taller", "Talleres (" + tallerCount + ")"], ["mentoria", "Mentorías (" + mentoriaCount + ")"]].map(function(item) {
+            return (
+              <button key={item[0]} onClick={function() { setFilter(item[0]); }}
+                className={"px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer " + (filter === item[0] ? "bg-white shadow text-gray-800" : "text-gray-500")}>
+                {item[1]}
+              </button>
+            );
+          })}
+        </div>
+        <button onClick={openAdd} className="px-3 py-2 rounded-lg text-white font-medium text-sm cursor-pointer" style={{ background: "#1F2A5C" }}>+ Bloqueo</button>
+        <button onClick={function() { setAddingAsueto(true); setAName(""); setADate(""); }} className="px-3 py-2 rounded-lg text-white font-medium text-sm cursor-pointer" style={{ background: "#B22222" }}>+ Asueto</button>
+      </div>
+
+      {shown.length === 0 && (
+        <div className="text-center py-14 text-gray-400">
+          <p className="text-3xl mb-2">📅</p>
+          <p>Sin bloqueos.</p>
+        </div>
+      )}
+
+      {shown.map(function(b) {
+        var dayName = dateToDay(b.date);
+        var dt = new Date(b.date + "T12:00:00");
+        var names = b.pIds.map(function(id) {
+          var p = data.practicantes.find(function(x) { return x.id === id; });
+          return p ? p.name : id;
+        }).join(", ");
+        var bgClass = b.type === "taller" ? "border-amber-200 bg-amber-50/50" : "border-purple-200 bg-purple-50/50";
+        var icon = b.type === "taller" ? "📋" : "🎓";
+        return (
+          <div key={b.id} className={"border rounded-lg p-3 mb-1.5 flex items-center justify-between text-sm " + bgClass}>
+            <div className="min-w-0">
+              <p className="font-medium truncate">{icon} {b.name}{b.session ? " (" + b.session + ")" : ""}</p>
+              <p className="text-xs text-gray-500 mt-0.5">{dayName} {dt.getDate()}/{dt.getMonth() + 1} · {fmtH12(b.hour)} · {names}</p>
+            </div>
+            <ConfirmBtn onConfirm={function() { removeB(b.id); }} label="×" confirmLabel="¿Sí?" />
+          </div>
+        );
+      })}
+
+      <Modal open={adding} onClose={function() { setAdding(false); }} title="Nuevo bloqueo">
+        <div className="space-y-4">
+          <div className="flex gap-3">
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={bType === "taller"} onChange={function() { setBType("taller"); }} />
+              Taller
+            </label>
+            <label className="flex items-center gap-1.5">
+              <input type="radio" checked={bType === "mentoria"} onChange={function() { setBType("mentoria"); }} />
+              Mentoría
+            </label>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Nombre</label>
+              <input value={bName} onChange={function(e) { setBName(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Ej: Ansiedad" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Sesión</label>
+              <input value={bSession} onChange={function(e) { setBSession(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Ej: Gpo1-S1" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Fecha *</label>
+              <input type="date" value={bDate} onChange={function(e) { setBDate(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">Hora *</label>
+              <select value={bHour} onChange={function(e) { setBHour(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                {HOURS.map(function(h) { return <option key={h} value={h}>{fmtH12(h)}</option>; })}
+              </select>
+            </div>
+          </div>
+          <div>
+            <label className="block text-xs font-medium text-gray-700 mb-1">Practicantes bloqueados *</label>
+            <div className="flex flex-wrap gap-2">
+              {data.practicantes.map(function(p) {
+                var sel = bPIds.includes(p.id);
+                return (
+                  <button key={p.id} onClick={function() { togglePrac(p.id); }}
+                    className={"px-3 py-1.5 rounded-full text-xs font-medium cursor-pointer border " + (sel ? "bg-blue-500 text-white border-blue-500" : "bg-white text-gray-600 border-gray-300 hover:border-blue-300")}>
+                    {p.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex justify-end gap-3 pt-3 border-t">
+            <button onClick={function() { setAdding(false); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+            <button onClick={saveB} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Guardar</button>
+          </div>
+        </div>
+      </Modal>
+
+      {/* Asuetos section */}
+      {asuetos.length > 0 && (
+        <div className="mt-6">
+          <h4 className="font-semibold text-sm mb-2" style={{ color: "#B22222" }}>🏖️ Asuetos / Días sin servicio</h4>
+          <div className="space-y-1.5">
+            {asuetos.sort(function(a, b) { return a.date.localeCompare(b.date); }).map(function(a) {
+              var dt = new Date(a.date + "T12:00:00");
+              return (
+                <div key={a.id} className="border border-red-200 bg-red-50/50 rounded-lg p-3 flex items-center justify-between text-sm">
+                  <div>
+                    <p className="font-medium">🏖️ {a.name}</p>
+                    <p className="text-xs text-gray-500 mt-0.5">{dateToDay(a.date)} {dt.getDate()}/{dt.getMonth() + 1}/{dt.getFullYear()}</p>
+                  </div>
+                  <ConfirmBtn onConfirm={function() { removeAsueto(a.id); }} label="×" confirmLabel="¿Sí?" />
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      <Modal open={addingAsueto} onClose={function() { setAddingAsueto(false); }} title="Nuevo asueto / día sin servicio">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Nombre del asueto *</label>
+            <input value={aName} onChange={function(e) { setAName(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Ej: Día de la Independencia" />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fecha *</label>
+            <input type="date" value={aDate} onChange={function(e) { setADate(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          <p className="text-xs text-gray-500">Este día se bloquea todo el departamento. No se atienden pacientes.</p>
+          <div className="flex justify-end gap-3 pt-3 border-t">
+            <button onClick={function() { setAddingAsueto(false); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+            <button onClick={saveAsueto} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#B22222" }}>Guardar asueto</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+function AsignarTab({ data, onSave, toast }) {
+  const [selAl, setSelAl] = useState("");
+  const [modal, setModal] = useState(null);
+  const [selPr, setSelPr] = useState("");
+  const [firstDate, setFirstDate] = useState("");
+
+  var alumno = data.alumnos.find(function(a) { return a.id === selAl; });
+  var existing = alumno ? data.citas.find(function(c) { return c.alumnoId === alumno.id && c.active; }) : null;
+
+  function findConflicts(pracId, day, hour) {
+    return data.bloqueos.filter(function(b) {
+      if (!b.pIds.includes(pracId)) return false;
+      if (b.hour !== hour) return false;
+      return dateToDay(b.date) === day;
+    });
+  }
+
+  function wouldExceed2Consecutive(pracId, day, newHour) {
+    var existing = data.citas
+      .filter(function(c) { return c.active && c.practicanteId === pracId && c.day === day; })
+      .map(function(c) { return parseInt(c.hour); });
+    var all = existing.concat([parseInt(newHour)]);
+    all.sort(function(a, b) { return a - b; });
+    var run = 1;
+    for (var i = 1; i < all.length; i++) {
+      if (all[i] === all[i - 1] + 1) {
+        run++;
+        if (run > 2) return true;
+      } else {
+        run = 1;
+      }
+    }
+    return false;
+  }
+
+  var slotInfo = useMemo(function() {
+    if (!alumno) return {};
+    var info = {};
+    DAYS.forEach(function(d) {
+      info[d] = {};
+      HOURS.forEach(function(h) {
+        var hasClass = alumno.clases[d] && alumno.clases[d].includes(h);
+        /* Count only non-propiaOficina citas against shared offices */
+        var citasShared = data.citas.filter(function(c) {
+          if (!c.active || c.day !== d || c.hour !== h) return false;
+          var pr = data.practicantes.find(function(p) { return p.id === c.practicanteId; });
+          return pr && !pr.propiaOficina;
+        }).length;
+        var oficinas = MAX_OFICINAS - citasShared;
+
+        var pracs = data.practicantes.filter(function(p) {
+          var inSched = p.schedule[d] && p.schedule[d].includes(h);
+          var busy = data.citas.some(function(c) { return c.active && c.practicanteId === p.id && c.day === d && c.hour === h; });
+          var tooMany = wouldExceed2Consecutive(p.id, d, h);
+          /* Practicantes with own office are always available (no office limit) */
+          /* Regular practicantes need a shared office available */
+          if (p.propiaOficina) {
+            return inSched && !busy && !tooMany;
+          }
+          return inSched && !busy && !tooMany && oficinas > 0;
+        }).map(function(p) {
+          return { ...p, conflicts: findConflicts(p.id, d, h) };
+        });
+        info[d][h] = { hasClass: hasClass, oficinas: oficinas, pracs: pracs, citasShared: citasShared };
+      });
+    });
+    return info;
+  }, [alumno, data]);
+
+  function assign() {
+    if (!modal || !firstDate) return;
+    var pracId = selPr || (modal.pracs.length === 1 ? modal.pracs[0].id : "");
+    if (!pracId) return;
+    var cita = { id: uid(), alumnoId: selAl, practicanteId: pracId, day: modal.day, hour: modal.hour, firstDate: firstDate, active: true };
+    onSave({ ...data, citas: data.citas.concat([cita]) });
+    toast("✓ Cita asignada");
+    setModal(null);
+    setSelPr("");
+    setFirstDate("");
+  }
+
+  /* Exclude students with terminal status */
+  var terminados = {};
+  data.citas.forEach(function(c) {
+    if (!c.active && (c.status === "alta" || c.status === "baja_manual" || c.status === "baja_faltas" || c.status === "canalizada")) {
+      terminados[c.alumnoId] = c.status;
+    }
+  });
+  /* If student has an active cita, they're NOT terminated */
+  data.citas.forEach(function(c) {
+    if (c.active && terminados[c.alumnoId]) {
+      delete terminados[c.alumnoId];
+    }
+  });
+
+  var alumnosDisponibles = data.alumnos.filter(function(a) { return !terminados[a.id]; });
+  var sinCita = alumnosDisponibles.filter(function(a) { return !data.citas.some(function(c) { return c.alumnoId === a.id && c.active; }); });
+  var conCita = alumnosDisponibles.filter(function(a) { return data.citas.some(function(c) { return c.alumnoId === a.id && c.active; }); });
+
+  var modalPracId = modal ? (selPr || (modal.pracs.length === 1 ? modal.pracs[0].id : "")) : "";
+  var modalPrac = modal ? modal.pracs.find(function(p) { return p.id === modalPracId; }) : null;
+
+  function renderSlotCell(d, h) {
+    var s = slotInfo[d] && slotInfo[d][h];
+    if (!s) return <td key={d} className="border border-gray-300"></td>;
+
+    if (s.hasClass) {
+      return <td key={d} className="border border-gray-300 bg-red-50 text-center text-red-400 p-1 text-xs">En clase</td>;
+    }
+
+    if (s.pracs.length === 0) {
+      return <td key={d} className="border border-gray-300 bg-gray-50 text-center text-gray-400 p-1 text-xs">—</td>;
+    }
+
+    var regularPracs = s.pracs.filter(function(p) { return !p.propiaOficina; });
+    var karlaAvail = s.pracs.find(function(p) { return p.propiaOficina; });
+    var hasConf = s.pracs.some(function(p) { return p.conflicts.length > 0; });
+    var bgClass = hasConf ? "bg-amber-50 hover:bg-amber-100" : "bg-emerald-50 hover:bg-emerald-100";
+    var textClass = hasConf ? "text-amber-700" : "text-emerald-700";
+    var pracNames = regularPracs.map(function(p) { return p.name.split(" ")[0]; }).join(", ");
+
+    return (
+      <td key={d} className={"border border-gray-300 p-1 cursor-pointer " + bgClass}
+        onClick={function() {
+          setModal({ day: d, hour: h, pracs: s.pracs, oficinas: s.oficinas });
+          setSelPr(s.pracs.length === 1 ? s.pracs[0].id : "");
+          setFirstDate("");
+        }}>
+        <div className="text-center text-xs">
+          {regularPracs.length > 0 && <p className={"font-medium " + textClass}>{s.oficinas} ofic.</p>}
+          {regularPracs.length > 0 && <p className="text-gray-500 truncate" style={{ fontSize: 10 }}>{pracNames}</p>}
+          {karlaAvail && <p className="text-purple-600 font-medium" style={{ fontSize: 10 }}>★ Karla</p>}
+          {hasConf && <p className="text-amber-600" style={{ fontSize: 10 }}>⚠</p>}
+        </div>
+      </td>
+    );
+  }
+
+  return (
+    <div>
+      <div className="mb-4">
+        <label className="block text-sm font-medium text-gray-700 mb-1">Seleccionar alumno</label>
+        <select value={selAl} onChange={function(e) { setSelAl(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <option value="">Elegir alumno...</option>
+          {sinCita.length > 0 && (
+            <optgroup label="Sin cita">
+              {sinCita.map(function(a) { return <option key={a.id} value={a.id}>{a.name} ({a.matricula})</option>; })}
+            </optgroup>
+          )}
+          {conCita.length > 0 && (
+            <optgroup label="Con cita activa">
+              {conCita.map(function(a) { return <option key={a.id} value={a.id}>{a.name} ({a.matricula})</option>; })}
+            </optgroup>
+          )}
+        </select>
+      </div>
+
+      {existing && (
+        <div className="mb-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm text-amber-800">
+          ⚠️ Ya tiene cita: <strong>{existing.day} {fmtH12(existing.hour)}</strong>. Para asignar otra, da de baja la actual en "Citas".
+        </div>
+      )}
+
+      {alumno && !existing && data.practicantes.length > 0 && (
+        <div>
+          <div className="mb-3 flex flex-wrap gap-3 text-xs text-gray-600">
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-emerald-100 border border-emerald-300 inline-block"></span> Disponible</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-amber-100 border border-amber-300 inline-block"></span> Con conflictos</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-red-100 border border-red-200 inline-block"></span> En clase</span>
+            <span className="flex items-center gap-1"><span className="w-3 h-3 rounded-sm bg-gray-100 border border-gray-300 inline-block"></span> No disponible</span>
+            <span className="flex items-center gap-1"><span className="text-purple-600 font-bold">★</span> Karla (oficina propia)</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="text-xs border-collapse w-full" style={{ minWidth: 380 }}>
+              <thead>
+                <tr>
+                  <th className="p-2 border border-gray-300 bg-gray-50 w-14"></th>
+                  {DAYS.map(function(d) { return <th key={d} className="p-2 border border-gray-300 bg-gray-50 text-center font-semibold">{d}</th>; })}
+                </tr>
+              </thead>
+              <tbody>
+                {HOURS.map(function(h) {
+                  return (
+                    <tr key={h}>
+                      <td className="p-1 border border-gray-300 text-right font-mono bg-gray-50 text-gray-500" style={{ fontSize: 10 }}>{fmtH12(h)}</td>
+                      {DAYS.map(function(d) { return renderSlotCell(d, h); })}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {!alumno && (
+        <div className="text-center py-12 text-gray-400">
+          <p className="text-3xl mb-2">📅</p>
+          <p>Selecciona un alumno para ver horarios disponibles.</p>
+        </div>
+      )}
+
+      <Modal open={modal !== null} onClose={function() { setModal(null); }} title="Asignar cita" wide={true}>
+        {modal && alumno && (
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+              <p className="font-semibold">{alumno.name} <span className="font-normal text-gray-500">({alumno.matricula})</span></p>
+              <p className="text-blue-700 font-medium mt-1">{modal.day} a las {fmtH12(modal.hour)} · {modal.oficinas} oficina(s) compartida(s) libre(s)</p>
+            </div>
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Practicante</label>
+              {modal.pracs.length === 1 ? (
+                <p className="text-sm font-medium" style={{ color: "#1F2A5C" }}>{modal.pracs[0].name}{modal.pracs[0].propiaOficina ? " (oficina propia)" : ""}</p>
+              ) : (
+                <select value={selPr} onChange={function(e) { setSelPr(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">Elegir...</option>
+                  {modal.pracs.map(function(p) {
+                    var oficTxt = p.propiaOficina ? " ★ oficina propia" : "";
+                    var confTxt = p.conflicts.length > 0 ? " ⚠️ (" + p.conflicts.length + " conflicto" + (p.conflicts.length > 1 ? "s" : "") + ")" : " ✓";
+                    return <option key={p.id} value={p.id}>{p.name}{oficTxt}{confTxt}</option>;
+                  })}
+                </select>
+              )}
+            </div>
+
+            {modalPrac && modalPrac.conflicts.length > 0 && (
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm">
+                <p className="font-medium text-amber-800 mb-2">⚠️ {modalPrac.name} tiene {modalPrac.conflicts.length} fecha(s) con conflicto:</p>
+                {modalPrac.conflicts.map(function(c) {
+                  var dt = new Date(c.date + "T12:00:00");
+                  var icon = c.type === "taller" ? "📋" : "🎓";
+                  return <p key={c.id} className="text-xs text-amber-700 mb-1">• {fmtDateES(c.date)} ({dt.getDate()}/{dt.getMonth() + 1}) — {icon} {c.name}{c.session ? " (" + c.session + ")" : ""}</p>;
+                })}
+                <p className="text-xs text-amber-600 mt-2">En estas fechas, el practicante no podrá atender.</p>
+              </div>
+            )}
+
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Fecha de primera cita</label>
+              <input type="date" value={firstDate} onChange={function(e) { setFirstDate(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+              {firstDate && <p className="text-xs text-gray-500 mt-1">Primera cita: {fmtDateES(firstDate)} a las {fmtH12(modal.hour)}</p>}
+            </div>
+
+            <div className="flex justify-end gap-3 pt-3 border-t">
+              <button onClick={function() { setModal(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+              <button onClick={assign} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#B22222" }}>Asignar cita</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+    </div>
+  );
+}
+
+/* ── CITAS ── */
+
+function getWeeklyDates(firstDate, count) {
+  var dates = [];
+  var d = new Date(firstDate + "T12:00:00");
+  for (var i = 0; i < count; i++) {
+    var iso = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    dates.push(iso);
+    d.setDate(d.getDate() + 7);
+  }
+  return dates;
+}
+
+function genStudentMsg(alName, dateStr, hour) {
+  var dia = fmtDateES(dateStr);
+  var hora = fmtH12(hour);
+  var lines = [
+    "Hola " + alName + " buenos días, tu cita en el departamento quedará para el día " + dia + " a la " + hora,
+    "",
+    "Recuerda:",
+    "",
+    "\u2022\tEn caso de no asistir, reportarte 1 día antes por este medio, en caso de emergencia reportarse el mismo día.",
+    "\u2022\tTienen 10 minutos de tolerancia para asistir a su cita.",
+    "\u2022\tÚnicamente se permiten 3 faltas a sus cita.",
+    "",
+    "FAVOR DE RESPONDER ESTE MENSAJE DE ENTERADO."
+  ];
+  return lines.join("\n");
+}
+
+function genSinCupoMsg(alName) {
+  var lines = [
+    "Hola " + alName + " buenos días, por el momento no contamos con espacio disponible para agendar tu cita en el departamento.",
+    "",
+    "Te contactaremos en cuanto se libere un espacio.",
+    "",
+    "Cualquier duda estamos a tus órdenes."
+  ];
+  return lines.join("\n");
+}
+
+function genCupoLiberadoMsg(alName, dateStr, hour) {
+  var dia = fmtDateES(dateStr);
+  var hora = fmtH12(hour);
+  var lines = [
+    "Hola " + alName + " buenos días, te informamos que ya contamos con un espacio disponible para tu cita en el departamento, la cual quedará para el día " + dia + " a la " + hora + ".",
+    "",
+    "Recuerda:",
+    "",
+    "\u2022\tEn caso de no asistir, reportarte 1 día antes por este medio, en caso de emergencia reportarse el mismo día.",
+    "\u2022\tTienen 10 minutos de tolerancia para asistir a su cita.",
+    "\u2022\tÚnicamente se permiten 3 faltas a sus cita.",
+    "",
+    "FAVOR DE RESPONDER ESTE MENSAJE DE ENTERADO."
+  ];
+  return lines.join("\n");
+}
+
+function genFaltaMsg(alName, faltaNum, dateStr, hour) {
+  var nextDia = fmtDateES(dateStr);
+  var hora = fmtH12(hour);
+  var lines = [
+    "Hola " + alName + " buenos días, se registró tu inasistencia a tu cita programada en el departamento.",
+    "",
+    "Te recordamos que:",
+    "",
+    "\u2022\tÚnicamente se permiten 3 faltas a sus cita.",
+    "\u2022\tEn caso de acumular 3 faltas, se procederá a dar de baja del servicio.",
+    "\u2022\tLlevas " + faltaNum + " falta" + (faltaNum > 1 ? "s" : "") + " de 3 permitidas.",
+    ""
+  ];
+  if (faltaNum >= 3) {
+    lines.push("Lamentablemente, al acumular 3 faltas se procederá a dar de baja tu cita del departamento.");
+  } else {
+    lines.push("Tu siguiente cita queda para el día " + nextDia + " a la " + hora + ".");
+    lines.push("");
+    lines.push("FAVOR DE RESPONDER ESTE MENSAJE DE ENTERADO.");
+  }
+  return lines.join("\n");
+}
+
+function genNoAppointmentMsg(alName, conflictDateStr, nextDateStr, hour) {
+  var lines = [
+    "Hola " + alName + " buenos días, te informo que esta semana no tendremos cita el " + fmtDateES(conflictDateStr) + ".",
+    "Tu siguiente cita será el " + fmtDateES(nextDateStr) + " a la " + fmtH12(hour) + ".",
+    "",
+    "FAVOR DE RESPONDER ESTE MENSAJE DE ENTERADO."
+  ];
+  return lines.join("\n");
+}
+
+function findCitaConflicts(cita, bloqueos) {
+  var dates = getWeeklyDates(cita.firstDate, 16);
+  var conflicts = [];
+  dates.forEach(function(dateStr, i) {
+    var dayName = dateToDay(dateStr);
+    var matching = bloqueos.filter(function(b) {
+      return b.pIds.includes(cita.practicanteId) && b.date === dateStr && b.hour === cita.hour;
+    });
+    if (matching.length === 0) {
+      matching = bloqueos.filter(function(b) {
+        return b.pIds.includes(cita.practicanteId) && b.hour === cita.hour && dateToDay(b.date) === dayName && b.date === dateStr;
+      });
+    }
+    if (matching.length > 0) {
+      var nextDate = i + 1 < dates.length ? dates[i + 1] : null;
+      conflicts.push({ date: dateStr, week: i, bloqueo: matching[0], nextDate: nextDate });
+    }
+  });
+  return conflicts;
+}
+
+function CitasTab({ data, onSave, toast }) {
+  const [msgModal, setMsgModal] = useState(null);
+  const [faltaModal, setFaltaModal] = useState(null);
+  const [view, setView] = useState("list");
+  const [search, setSearch] = useState("");
+  const [bajaModal, setBajaModal] = useState(null);
+  const [bajaStatus, setBajaStatus] = useState("baja_manual");
+  const [reagendarModal, setReagendarModal] = useState(null);
+  const [reagendarMotivo, setReagendarMotivo] = useState("alumno");
+  const [reagendarFecha, setReagendarFecha] = useState("");
+  const [citaAccion, setCitaAccion] = useState(null);
+
+  var active = data.citas.filter(function(c) { return c.active; });
+  var sorted = active.slice().sort(function(a, b) {
+    var di = DAYS.indexOf(a.day) - DAYS.indexOf(b.day);
+    return di !== 0 ? di : parseInt(a.hour) - parseInt(b.hour);
+  });
+
+  var filtered = sorted.filter(function(c) {
+    if (!search) return true;
+    var q = search.toLowerCase();
+    var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+    var pr = data.practicantes.find(function(p) { return p.id === c.practicanteId; });
+    return (al && (al.name.toLowerCase().includes(q) || al.matricula.includes(q))) || (pr && pr.name.toLowerCase().includes(q));
+  });
+
+  function deactivateWithStatus(id, status) {
+    onSave({ ...data, citas: data.citas.map(function(c) {
+      if (c.id !== id) return c;
+      return { ...c, active: false, status: status };
+    }) });
+    var labels = { baja_manual: "Baja manual", alta: "Alta", canalizada: "Canalización", baja_faltas: "Baja por faltas" };
+    toast((labels[status] || "Baja") + " registrada");
+    setBajaModal(null);
+  }
+
+  function registrarFalta(citaId) {
+    var cita = data.citas.find(function(c) { return c.id === citaId; });
+    if (!cita) return;
+    var newFaltas = (cita.faltas || 0) + 1;
+    var updatedCitas = data.citas.map(function(c) {
+      if (c.id !== citaId) return c;
+      if (newFaltas >= 3) return { ...c, faltas: newFaltas, active: false, status: "baja_faltas" };
+      return { ...c, faltas: newFaltas };
+    });
+    onSave({ ...data, citas: updatedCitas });
+    if (newFaltas >= 3) { toast("3 faltas — baja automática"); } else { toast("Falta #" + newFaltas + " registrada"); }
+  }
+
+  function quitarFalta(citaId) {
+    onSave({ ...data, citas: data.citas.map(function(c) {
+      if (c.id !== citaId) return c;
+      return { ...c, faltas: Math.max(0, (c.faltas || 0) - 1) };
+    }) });
+    toast("Falta removida");
+  }
+
+  function reagendar(citaId, fechaReagendada) {
+    onSave({ ...data, citas: data.citas.map(function(c) {
+      if (c.id !== citaId) return c;
+      var arr = Array.isArray(c.reagendadas) ? c.reagendadas.slice() : [];
+      if (fechaReagendada && !arr.includes(fechaReagendada)) {
+        arr.push(fechaReagendada);
+      }
+      return { ...c, reagendadas: arr };
+    }) });
+    toast("Sesión reagendada");
+    setReagendarModal(null);
+    setReagendarFecha("");
+  }
+
+  function getReagendadasCount(cita) {
+    if (Array.isArray(cita.reagendadas)) return cita.reagendadas.length;
+    if (typeof cita.reagendadas === "number") return cita.reagendadas;
+    return 0;
+  }
+
+  function isReagendada(cita, dateStr) {
+    if (Array.isArray(cita.reagendadas)) return cita.reagendadas.includes(dateStr);
+    return false;
+  }
+
+  function genPracTitle(c, dateStr) {
+    var pr = data.practicantes.find(function(p) { return p.id === c.practicanteId; });
+    if (!pr) return "";
+    return pr.name + " - " + fmtDateES(dateStr || c.firstDate) + " - " + fmtH12(c.hour);
+  }
+
+  function genPracBody(c) {
+    var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+    if (!al) return "";
+    return "Nombre: " + al.name + "\nMatrícula: " + al.matricula + "\nCarrera: " + al.carrera + "\nMotivo de consulta: " + al.motivoConsulta + (al.enLinea ? "\nModalidad: En línea" : "");
+  }
+
+  /* Agenda semanal */
+  const [agendaModal, setAgendaModal] = useState(false);
+  const [agendaPrac, setAgendaPrac] = useState("");
+
+  /* Calendario visual */
+  const [calModal, setCalModal] = useState(false);
+  const [calMonday, setCalMonday] = useState("");
+
+  function buildCalItems(weekDates, activeCitas, dt) {
+    var grid = {};
+    var usedHours = {};
+    var asuetos = dt.asuetos || [];
+    HOURS.forEach(function(h) { grid[h] = []; });
+
+    weekDates.forEach(function(dateStr, dayIdx) {
+      var dayName = DAYS[dayIdx];
+      var calDate = new Date(dateStr + "T12:00:00");
+
+      /* Check if this day is an asueto */
+      var asueto = asuetos.find(function(a) { return a.date === dateStr; });
+      if (asueto) {
+        grid["9:00"].push({ dayIdx: dayIdx, label: "ASUETO: " + asueto.name, color: { bg: "#B22222", text: "#fff" }, type: "asueto" });
+        usedHours["9:00"] = true;
+        return;
+      }
+
+      HOURS.forEach(function(h) {
+        var citasHere = activeCitas.filter(function(c) {
+          if (c.day !== dayName || c.hour !== h) return false;
+          var startDate = new Date(c.firstDate + "T12:00:00");
+          return startDate <= calDate;
+        });
+        citasHere.forEach(function(c) {
+          var al = dt.alumnos.find(function(a) { return a.id === c.alumnoId; });
+          var initials = al ? getInitials(al.name) : "??";
+
+          /* Check if this specific date was reagendada */
+          var wasReag = false;
+          if (Array.isArray(c.reagendadas) && c.reagendadas.includes(dateStr)) {
+            wasReag = true;
+          }
+
+          /* Check if practicante has a bloqueo on this specific date+hour */
+          var hasBloq = dt.bloqueos.some(function(b) {
+            return b.date === dateStr && b.hour === h && b.pIds.includes(c.practicanteId);
+          });
+
+          if (wasReag) {
+            /* Show as reagendada */
+            var color = PRAC_COLORS[c.practicanteId] || { bg: "#ccc", text: "#000" };
+            grid[h].push({ dayIdx: dayIdx, label: initials + "-REAG", color: { bg: "#d8b4fe", text: "#581c87" }, type: "reagendada" });
+            usedHours[h] = true;
+          } else if (hasBloq) {
+            /* Don't show - practicante is blocked */
+          } else {
+            var asuetoDates = asuetos.map(function(a) { return a.date; });
+            var reagCount = 0;
+            if (Array.isArray(c.reagendadas)) {
+              reagCount = c.reagendadas.filter(function(rd) {
+                return new Date(rd + "T12:00:00") < calDate;
+              }).length;
+            } else if (typeof c.reagendadas === "number") {
+              reagCount = c.reagendadas;
+            }
+            var sessionLbl = getSessionLabel(c.firstDate, dateStr, reagCount, asuetoDates);
+            var color2 = PRAC_COLORS[c.practicanteId] || { bg: "#ccc", text: "#000" };
+            var onlineSuffix = al && al.enLinea ? "*" : "";
+            grid[h].push({ dayIdx: dayIdx, label: initials + "-" + sessionLbl + onlineSuffix, color: color2, type: "cita" });
+            usedHours[h] = true;
+          }
+        });
+
+        var bloqs = dt.bloqueos.filter(function(b) { return b.date === dateStr && b.hour === h; });
+        bloqs.forEach(function(b) {
+          var typeLabel = b.type === "taller" ? "TALLER" : "MENTORÍA";
+          var nameInit = getInitials(b.name);
+          var sessionTxt = "";
+          if (b.session) {
+            var s = b.session.replace(/\s+/g, "").replace(/-/g, "");
+            var gpoMatch = s.match(/[Gg]po(\d+)/i);
+            var sesMatch = s.match(/[Ss](\d+)/);
+            if (gpoMatch) sessionTxt += "GPO" + gpoMatch[1].padStart(2, "0");
+            if (gpoMatch && sesMatch) sessionTxt += " ";
+            if (sesMatch) sessionTxt += "S" + sesMatch[1];
+            if (!gpoMatch && !sesMatch) sessionTxt = b.session;
+          }
+          var label = typeLabel + " " + nameInit;
+          if (sessionTxt) label += " " + sessionTxt;
+          var firstPid = b.pIds[0];
+          var color = PRAC_COLORS[firstPid] || { bg: "#888", text: "#fff" };
+          grid[h].push({ dayIdx: dayIdx, label: label, color: color, type: "bloqueo" });
+          usedHours[h] = true;
+        });
+      });
+    });
+    return { grid: grid, activeHours: HOURS.filter(function(h) { return usedHours[h]; }) };
+  }
+
+  function drawCalCanvas(canvas, dayHeaders, activeHrs, grid, dt) {
+    var COL_W = 240;
+    var HOUR_W = 80;
+    var ROW_H = 38;
+    var HDR_H = 44;
+    var LEGEND_H = 36;
+    var W = HOUR_W + COL_W * 5;
+    var H = LEGEND_H + HDR_H + ROW_H * activeHrs.length;
+    canvas.width = W;
+    canvas.height = H;
+    var ctx = canvas.getContext("2d");
+
+    /* Background */
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, W, H);
+
+    /* Legend row */
+    var lx = 8;
+    ctx.font = "bold 12px Arial, sans-serif";
+    dt.practicantes.forEach(function(p) {
+      var co = PRAC_COLORS[p.id] || { bg: "#ccc", text: "#000" };
+      var name = p.name.split(" ")[0];
+      var tw = ctx.measureText(name).width + 16;
+      ctx.fillStyle = co.bg;
+      roundRect(ctx, lx, 6, tw, 24, 4);
+      ctx.fill();
+      ctx.fillStyle = co.text;
+      ctx.fillText(name, lx + 8, 23);
+      lx += tw + 6;
+    });
+    /* Online legend */
+    ctx.font = "bold 11px Arial, sans-serif";
+    ctx.fillStyle = "#0891b2";
+    ctx.textAlign = "left";
+    ctx.fillText("* = En línea", lx + 10, 23);
+
+    var oY = LEGEND_H;
+
+    /* Header row */
+    ctx.fillStyle = "#e5e7eb";
+    ctx.fillRect(0, oY, W, HDR_H);
+    ctx.strokeStyle = "#9ca3af";
+    ctx.lineWidth = 1;
+    ctx.strokeRect(0, oY, HOUR_W, HDR_H);
+    ctx.font = "bold 14px Arial, sans-serif";
+    ctx.fillStyle = "#111";
+    for (var di = 0; di < 5; di++) {
+      var x = HOUR_W + di * COL_W;
+      ctx.strokeRect(x, oY, COL_W, HDR_H);
+      ctx.fillStyle = "#111";
+      ctx.textAlign = "center";
+      ctx.fillText(dayHeaders[di], x + COL_W / 2, oY + 28);
+    }
+
+    /* Rows */
+    for (var ri = 0; ri < activeHrs.length; ri++) {
+      var h = activeHrs[ri];
+      var y = oY + HDR_H + ri * ROW_H;
+
+      /* Hour label */
+      ctx.fillStyle = "#f9fafb";
+      ctx.fillRect(0, y, HOUR_W, ROW_H);
+      ctx.strokeStyle = "#9ca3af";
+      ctx.strokeRect(0, y, HOUR_W, ROW_H);
+      ctx.fillStyle = "#374151";
+      ctx.font = "bold 12px Arial, sans-serif";
+      ctx.textAlign = "right";
+      ctx.fillText(fmtH12(h), HOUR_W - 8, y + 24);
+
+      /* Day cells */
+      for (var dj = 0; dj < 5; dj++) {
+        var cx = HOUR_W + dj * COL_W;
+        ctx.fillStyle = "#fff";
+        ctx.fillRect(cx, y, COL_W, ROW_H);
+        ctx.strokeStyle = "#9ca3af";
+        ctx.strokeRect(cx, y, COL_W, ROW_H);
+
+        var items = grid[h].filter(function(item) { return item.dayIdx === dj; });
+        if (items.length > 0) {
+          var itemW = (COL_W - 6 - (items.length - 1) * 3) / items.length;
+          for (var k = 0; k < items.length; k++) {
+            var it = items[k];
+            var ix = cx + 3 + k * (itemW + 3);
+            var iy = y + 4;
+            var ih = ROW_H - 8;
+
+            ctx.fillStyle = it.color.bg;
+            roundRect(ctx, ix, iy, itemW, ih, 4);
+            ctx.fill();
+
+            ctx.fillStyle = it.color.text;
+            var fontSize = it.type === "bloqueo" ? 9 : 12;
+            ctx.font = "bold " + fontSize + "px Arial, sans-serif";
+            ctx.textAlign = "center";
+
+            var maxTextW = itemW - 6;
+            var txt = it.label;
+            if (ctx.measureText(txt).width > maxTextW && txt.length > 8) {
+              txt = txt.slice(0, Math.max(6, Math.floor(txt.length * maxTextW / ctx.measureText(txt).width))) + "…";
+            }
+            ctx.fillText(txt, ix + itemW / 2, iy + ih / 2 + fontSize / 3);
+          }
+        }
+      }
+    }
+  }
+
+  function roundRect(ctx, x, y, w, h, r) {
+    ctx.beginPath();
+    ctx.moveTo(x + r, y);
+    ctx.lineTo(x + w - r, y);
+    ctx.quadraticCurveTo(x + w, y, x + w, y + r);
+    ctx.lineTo(x + w, y + h - r);
+    ctx.quadraticCurveTo(x + w, y + h, x + w - r, y + h);
+    ctx.lineTo(x + r, y + h);
+    ctx.quadraticCurveTo(x, y + h, x, y + h - r);
+    ctx.lineTo(x, y + r);
+    ctx.quadraticCurveTo(x, y, x + r, y);
+    ctx.closePath();
+  }
+
+  function downloadCalPNG() {
+    var weekDates = getWeekDates(calMonday);
+    var dayHeaders = weekDates.map(function(dateStr, i) {
+      var d = new Date(dateStr + "T12:00:00");
+      return DAYS[i] + " " + d.getDate();
+    });
+    var calItems = buildCalItems(weekDates, active, data);
+    var canvas = document.createElement("canvas");
+    drawCalCanvas(canvas, dayHeaders, calItems.activeHours, calItems.grid, data);
+    canvas.toBlob(function(blob) {
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = url;
+      a.download = "calendario_dop_" + calMonday + ".png";
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      toast("Imagen descargada");
+    });
+  }
+
+  function genAgendaSemanal(pracId) {
+    var pr = data.practicantes.find(function(p) { return p.id === pracId; });
+    if (!pr) return "";
+    var citasPrac = active.filter(function(c) { return c.practicanteId === pracId; });
+    if (citasPrac.length === 0) return pr.name + " no tiene pacientes asignados esta semana.";
+
+    var lines = ["📋 Agenda semanal — " + pr.name, ""];
+    DAYS.forEach(function(d) {
+      var citasDia = citasPrac.filter(function(c) { return c.day === d; }).sort(function(a, b) { return parseInt(a.hour) - parseInt(b.hour); });
+      if (citasDia.length > 0) {
+        lines.push(d.toUpperCase() + ":");
+        citasDia.forEach(function(c) {
+          var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+          if (al) {
+            var onlineTxt = al.enLinea ? " [En línea]" : "";
+            lines.push("\u2022 " + fmtH12(c.hour) + " — " + al.name + " (" + al.matricula + ")" + onlineTxt);
+          }
+        });
+        lines.push("");
+      }
+    });
+    return lines.join("\n");
+  }
+
+  /* Cambiar practicante */
+  const [cambiarModal, setCambiarModal] = useState(null);
+  const [nuevoPrac, setNuevoPrac] = useState("");
+
+  /* Cambiar fecha de inicio */
+  const [cambiarInicioModal, setCambiarInicioModal] = useState(null);
+  const [nuevaFechaInicio, setNuevaFechaInicio] = useState("");
+
+  /* Reagendar en bloque */
+  const [bulkReagModal, setBulkReagModal] = useState(false);
+  const [bulkReagTipo, setBulkReagTipo] = useState("practicante");
+  const [bulkReagPrac, setBulkReagPrac] = useState("");
+  const [bulkReagDay, setBulkReagDay] = useState("");
+  const [bulkReagFecha, setBulkReagFecha] = useState("");
+  const [bulkReagDone, setBulkReagDone] = useState(null);
+
+  /* Cancelar citas del día */
+  const [cancelDiaModal, setCancelDiaModal] = useState(false);
+  const [cancelDiaFecha, setCancelDiaFecha] = useState("");
+  const [cancelDiaApplied, setCancelDiaApplied] = useState(false);
+
+  function getCitasForDate(dateStr) {
+    if (!dateStr) return [];
+    var d = new Date(dateStr + "T12:00:00");
+    var dayName = DAY_MAP[d.getDay()];
+    if (!dayName) return [];
+    return data.citas.filter(function(c) { return c.active && c.day === dayName; });
+  }
+
+  function applyCancelDia() {
+    if (!cancelDiaFecha) return;
+    var citasCancel = getCitasForDate(cancelDiaFecha);
+    if (citasCancel.length === 0) return;
+    var affectedIds = {};
+    citasCancel.forEach(function(c) { affectedIds[c.id] = true; });
+    var updatedCitas = data.citas.map(function(c) {
+      if (!affectedIds[c.id]) return c;
+      var arr = Array.isArray(c.reagendadas) ? c.reagendadas.slice() : [];
+      if (!arr.includes(cancelDiaFecha)) arr.push(cancelDiaFecha);
+      return { ...c, reagendadas: arr };
+    });
+    onSave({ ...data, citas: updatedCitas });
+    setCancelDiaApplied(true);
+    toast(citasCancel.length + " cita(s) cancelada(s) en el calendario");
+  }
+
+  function getBulkCitas() {
+    var activeCitas = data.citas.filter(function(c) { return c.active; });
+    if (bulkReagTipo === "practicante" && bulkReagPrac && bulkReagDay) {
+      return activeCitas.filter(function(c) { return c.practicanteId === bulkReagPrac && c.day === bulkReagDay; });
+    }
+    if (bulkReagTipo === "dia" && bulkReagDay) {
+      return activeCitas.filter(function(c) { return c.day === bulkReagDay; });
+    }
+    return [];
+  }
+
+  function executeBulkReagendar() {
+    var afectadas = getBulkCitas();
+    if (afectadas.length === 0 || !bulkReagFecha) return;
+    var nextWeekDate = (function() {
+      var d = new Date(bulkReagFecha + "T12:00:00");
+      d.setDate(d.getDate() + 7);
+      return d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0") + "-" + String(d.getDate()).padStart(2, "0");
+    })();
+    var affectedIds = {};
+    afectadas.forEach(function(c) { affectedIds[c.id] = true; });
+    var updatedCitas = data.citas.map(function(c) {
+      if (!affectedIds[c.id]) return c;
+      var arr = Array.isArray(c.reagendadas) ? c.reagendadas.slice() : [];
+      if (!arr.includes(bulkReagFecha)) arr.push(bulkReagFecha);
+      return { ...c, reagendadas: arr };
+    });
+    onSave({ ...data, citas: updatedCitas });
+    var msgs = afectadas.map(function(c) {
+      var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+      if (!al) return null;
+      var diaOriginal = fmtDateES(bulkReagFecha);
+      var diaNext = fmtDateES(nextWeekDate);
+      var hora = fmtH12(c.hour);
+      var lines = [
+        "Hola " + al.name + " buenos d\u00edas, te informamos que por motivos administrativos no se podr\u00e1 llevar a cabo tu cita del d\u00eda " + diaOriginal + " a la " + hora + ".",
+        "",
+        "Tu cita se reagend\u00f3 para el d\u00eda " + diaNext + " a la " + hora + ".",
+        "",
+        "Recuerda:",
+        "",
+        "\u2022\tEn caso de no asistir, reportarte 1 d\u00eda antes por este medio, en caso de emergencia reportarse el mismo d\u00eda.",
+        "\u2022\tTienen 10 minutos de tolerancia para asistir a su cita.",
+        "\u2022\t\u00danicamente se permiten 3 faltas a sus cita.",
+        "",
+        "FAVOR DE RESPONDER ESTE MENSAJE DE ENTERADO."
+      ];
+      return { alumno: al.name, msg: lines.join("\n") };
+    }).filter(Boolean);
+    setBulkReagDone({ count: afectadas.length, msgs: msgs, nextDate: nextWeekDate });
+    toast(afectadas.length + " cita(s) reagendada(s)");
+  }
+
+  function cambiarFechaInicio() {
+    if (!cambiarInicioModal || !nuevaFechaInicio) return;
+    var updatedCitas = data.citas.map(function(c) {
+      if (c.id !== cambiarInicioModal.id) return c;
+      return { ...c, firstDate: nuevaFechaInicio };
+    });
+    onSave({ ...data, citas: updatedCitas });
+    toast("Fecha de inicio actualizada");
+    setCambiarInicioModal(null);
+  }
+
+  function cambiarPracticante() {
+    if (!cambiarModal || !nuevoPrac) return;
+    var updatedCitas = data.citas.map(function(c) {
+      if (c.id !== cambiarModal.id) return c;
+      return { ...c, practicanteId: nuevoPrac };
+    });
+    onSave({ ...data, citas: updatedCitas });
+    var prNuevo = data.practicantes.find(function(p) { return p.id === nuevoPrac; });
+    toast("Paciente reasignado a " + (prNuevo ? prNuevo.name : ""));
+    setCambiarModal(null);
+    setNuevoPrac("");
+  }
+
+  /* Grid data for weekly view */
+  var gridHours = [];
+  var gridData = {};
+  if (view === "grid" && active.length > 0) {
+    DAYS.forEach(function(d) { gridData[d] = {}; });
+    active.forEach(function(c) {
+      if (!gridData[c.day]) gridData[c.day] = {};
+      if (!gridData[c.day][c.hour]) gridData[c.day][c.hour] = [];
+      gridData[c.day][c.hour].push(c);
+    });
+    var hourSet = {};
+    active.forEach(function(c) { hourSet[c.hour] = true; });
+    gridHours = HOURS.filter(function(h) { return hourSet[h]; });
+  }
+
+  /* modal data */
+  var modalAl = null;
+  var modalPr = null;
+  var modalDates = [];
+  var modalConflicts = [];
+  if (msgModal) {
+    modalAl = data.alumnos.find(function(a) { return a.id === msgModal.alumnoId; });
+    modalPr = data.practicantes.find(function(p) { return p.id === msgModal.practicanteId; });
+    modalDates = getWeeklyDates(msgModal.firstDate, 16);
+    modalConflicts = findCitaConflicts(msgModal, data.bloqueos);
+  }
+
+  /* conflict dates as a Set for quick lookup */
+  var conflictDateSet = {};
+  if (modalConflicts.length > 0) {
+    modalConflicts.forEach(function(cf) { conflictDateSet[cf.date] = cf; });
+  }
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-4 gap-3 flex-wrap">
+        <input value={search} onChange={function(e) { setSearch(e.target.value); }} placeholder="Buscar paciente o practicante..." className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-[160px]" />
+        <div className="flex gap-2 items-center">
+          <button onClick={function() { setCalModal(true); setCalMonday(""); }} className="px-3 py-1.5 text-xs rounded border border-green-200 text-green-700 hover:bg-green-50 cursor-pointer font-medium">📸 Calendario</button>
+          <button onClick={function() { setBulkReagModal(true); setBulkReagTipo("practicante"); setBulkReagPrac(""); setBulkReagDay(""); setBulkReagFecha(""); setBulkReagDone(null); }} className="px-3 py-1.5 text-xs rounded border border-orange-200 text-orange-700 hover:bg-orange-50 cursor-pointer font-medium">🔄 Reagendar en bloque</button>
+          <button onClick={function() { setCancelDiaModal(true); setCancelDiaFecha(""); setCancelDiaApplied(false); }} className="px-3 py-1.5 text-xs rounded border border-red-200 text-red-700 hover:bg-red-50 cursor-pointer font-medium">❌ Cancelar día</button>
+          <div className="flex gap-1 bg-gray-100 rounded-lg p-0.5">
+            <button onClick={function() { setView("list"); }} className={"px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer " + (view === "list" ? "bg-white shadow text-gray-800" : "text-gray-500")}>Lista</button>
+            <button onClick={function() { setView("grid"); }} className={"px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer " + (view === "grid" ? "bg-white shadow text-gray-800" : "text-gray-500")}>Semanal</button>
+            <button onClick={function() { setView("celular"); }} className={"px-3 py-1.5 rounded-md text-xs font-medium cursor-pointer " + (view === "celular" ? "bg-white shadow text-gray-800" : "text-gray-500")}>📱 Celular</button>
+          </div>
+        </div>
+      </div>
+
+      {active.length === 0 && (
+        <div className="text-center py-14 text-gray-400">
+          <p className="text-3xl mb-2">📋</p>
+          <p>Sin citas activas.</p>
+        </div>
+      )}
+
+      {active.length > 0 && view === "list" && filtered.map(function(c) {
+        var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+        var pr = data.practicantes.find(function(p) { return p.id === c.practicanteId; });
+        var faltas = c.faltas || 0;
+        var reag = getReagendadasCount(c);
+        var prColor = PRAC_COLORS[c.practicanteId] || { bg: "#ccc", text: "#000" };
+        return (
+          <div key={c.id} className="border border-gray-200 rounded-lg p-3 mb-2 hover:border-gray-300">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ background: prColor.bg }}></span>
+                  <p className="font-semibold text-sm truncate" style={{ color: "#1F2A5C" }}>{al ? al.name : "—"}</p>
+                </div>
+                <p className="text-xs text-gray-500 ml-5">{al ? al.matricula : ""} · {al ? al.carrera : ""}</p>
+                <div className="flex flex-wrap gap-1.5 mt-1.5 text-xs ml-5">
+                  <span className="px-2 py-0.5 rounded-full bg-blue-100 text-blue-700 font-medium">{c.day} {fmtH12(c.hour)}</span>
+                  <span className="text-gray-500">→ {pr ? pr.name.split(" ")[0] : "—"}{pr && pr.propiaOficina ? " ★" : ""}</span>
+                  {faltas > 0 && <span className={"px-2 py-0.5 rounded-full font-medium " + (faltas >= 2 ? "bg-red-100 text-red-700" : "bg-amber-100 text-amber-700")}>{faltas}/3 faltas</span>}
+                  {reag > 0 && <span className="px-2 py-0.5 rounded-full bg-purple-100 text-purple-700 font-medium">{reag} reagendada{reag > 1 ? "s" : ""}</span>}
+                  {al && al.enLinea && <span className="px-2 py-0.5 rounded-full bg-cyan-100 text-cyan-700 font-medium">💻 En línea</span>}
+                </div>
+              </div>
+              <div className="flex gap-1 shrink-0 flex-wrap justify-end">
+                <button onClick={function() { setMsgModal(c); }} className="px-2 py-1 text-xs rounded border border-blue-200 text-blue-600 hover:bg-blue-50 cursor-pointer" title="Mensajes">💬</button>
+                <button onClick={function() { setCambiarModal(c); setNuevoPrac(""); }} className="px-2 py-1 text-xs rounded border border-purple-200 text-purple-600 hover:bg-purple-50 cursor-pointer" title="Cambiar practicante">🔄</button>
+                <button onClick={function() { setReagendarModal(c); setReagendarMotivo("alumno"); }} className="px-2 py-1 text-xs rounded border border-indigo-200 text-indigo-600 hover:bg-indigo-50 cursor-pointer" title="Reagendar">📅</button>
+                <button onClick={function() { setFaltaModal(c); }} className="px-2 py-1 text-xs rounded border border-amber-200 text-amber-600 hover:bg-amber-50 cursor-pointer" title="Registrar falta">⚠</button>
+                <button onClick={function() { setBajaModal(c); setBajaStatus("baja_manual"); }} className="px-2 py-1 text-xs rounded border border-red-200 text-red-600 hover:bg-red-50 cursor-pointer" title="Baja/Alta/Canalización">✕</button>
+              </div>
+            </div>
+          </div>
+        );
+      })}
+
+      {active.length > 0 && view === "grid" && (
+        <div className="overflow-x-auto">
+          <table className="text-xs border-collapse w-full" style={{ minWidth: 450 }}>
+            <thead>
+              <tr>
+                <th className="p-2 border border-gray-300 bg-gray-50 w-14"></th>
+                {DAYS.map(function(d) {
+                  return <th key={d} className="p-2 border border-gray-300 bg-gray-50 text-center font-semibold">{d}</th>;
+                })}
+              </tr>
+            </thead>
+            <tbody>
+              {gridHours.map(function(h) {
+                return (
+                  <tr key={h}>
+                    <td className="p-1.5 border border-gray-300 text-right font-mono bg-gray-50 text-gray-500" style={{ fontSize: 10 }}>{fmtH12(h)}</td>
+                    {DAYS.map(function(d) {
+                      var cs = (gridData[d] && gridData[d][h]) ? gridData[d][h] : [];
+                      var full = cs.length >= MAX_OFICINAS;
+                      var bgClass = full ? "bg-red-50" : cs.length > 0 ? "bg-emerald-50" : "";
+                      return (
+                        <td key={d} className={"border border-gray-300 p-1 align-top " + bgClass}>
+                          {cs.map(function(c) {
+                            var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+                            var pr = data.practicantes.find(function(p) { return p.id === c.practicanteId; });
+                            var shortName = al ? al.name.split(" ").slice(0, 2).join(" ") : "—";
+                            var pracName = pr ? pr.name.split(" ")[0] : "—";
+                            return (
+                              <div key={c.id} className="mb-1 p-1 rounded bg-white border border-gray-200 cursor-pointer hover:border-blue-300" onClick={function() { setCitaAccion(c); }}>
+                                <p className="font-medium truncate">{shortName}{al && al.enLinea ? " 💻" : ""}</p>
+                                <p className="text-gray-400 truncate">{pracName}</p>
+                              </div>
+                            );
+                          })}
+                          {full && <p className="text-red-400 text-center" style={{ fontSize: 10 }}>Lleno</p>}
+                        </td>
+                      );
+                    })}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {active.length > 0 && view === "celular" && (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-500 mb-2">📱 Vista compacta para celular — toca en un practicante para copiar su agenda.</p>
+          {data.practicantes.map(function(pr) {
+            var citasPrac = active.filter(function(c) { return c.practicanteId === pr.id; });
+            if (citasPrac.length === 0) return null;
+            var prColor = PRAC_COLORS[pr.id] || { bg: "#ccc", text: "#000" };
+            var agendaTxt = genAgendaSemanal(pr.id);
+            return (
+              <div key={pr.id} className="border border-gray-200 rounded-lg overflow-hidden">
+                <div className="flex items-center justify-between px-3 py-2" style={{ background: prColor.bg + "22" }}>
+                  <div className="flex items-center gap-2">
+                    <span className="w-3 h-3 rounded-full" style={{ background: prColor.bg }}></span>
+                    <span className="font-semibold text-sm">{pr.name.split(" ")[0]}</span>
+                    <span className="text-xs text-gray-500">({citasPrac.length} pac.)</span>
+                  </div>
+                  <CopyBtn text={agendaTxt} label="Copiar" />
+                </div>
+                <div className="px-3 py-2 space-y-1">
+                  {DAYS.map(function(d) {
+                    var citasDia = citasPrac.filter(function(c) { return c.day === d; }).sort(function(a, b) { return parseInt(a.hour) - parseInt(b.hour); });
+                    if (citasDia.length === 0) return null;
+                    return (
+                      <div key={d} className="text-xs">
+                        <span className="font-semibold text-gray-700">{d.substring(0, 3).toUpperCase()}: </span>
+                        {citasDia.map(function(c, ci) {
+                          var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+                          if (!al) return null;
+                          return <span key={c.id} className="text-gray-600">{ci > 0 ? " | " : ""}{fmtH12(c.hour)} {al.name.split(" ")[0]}{al.enLinea ? " 💻" : ""}</span>;
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+            <Modal open={msgModal !== null} onClose={function() { setMsgModal(null); }} title="Mensajes para Teams" wide={true}>
+        {msgModal && modalAl && modalPr && (
+          <div className="space-y-5">
+            <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+              <p className="font-semibold">{modalAl.name} <span className="font-normal text-gray-500">({modalAl.matricula})</span></p>
+              <p className="text-blue-700 mt-0.5">Cada {msgModal.day} a las {fmtH12(msgModal.hour)} → {modalPr.name}</p>
+            </div>
+
+            <div>
+              <h4 className="font-semibold text-sm mb-1" style={{ color: "#1F2A5C" }}>Publicación grupo practicantes (solo primera vez)</h4>
+              <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm space-y-2">
+                <div>
+                  <p className="text-xs text-gray-500 mb-0.5">Título:</p>
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="font-medium truncate">{genPracTitle(msgModal)}</p>
+                    <CopyBtn text={genPracTitle(msgModal)} />
+                  </div>
+                </div>
+                <hr className="border-gray-200" />
+                <div>
+                  <p className="text-xs text-gray-500 mb-0.5">Cuerpo:</p>
+                  <div className="flex items-start justify-between gap-2">
+                    <pre className="whitespace-pre-wrap font-sans text-gray-700">{genPracBody(msgModal)}</pre>
+                    <CopyBtn text={genPracBody(msgModal)} />
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {modalConflicts.length > 0 && (
+              <div>
+                <h4 className="font-semibold text-sm mb-2 text-amber-700">⚠️ Semanas sin cita por bloqueos ({modalConflicts.length})</h4>
+                <p className="text-xs text-gray-500 mb-2">En estas fechas el practicante tiene taller o mentoría. Copia el mensaje para avisarle al alumno.</p>
+                <div className="space-y-2">
+                  {modalConflicts.map(function(cf) {
+                    var dt = new Date(cf.date + "T12:00:00");
+                    var isPast = new Date(cf.date + "T23:59:59") < new Date();
+                    var icon = cf.bloqueo.type === "taller" ? "📋" : "🎓";
+                    var noMsg = cf.nextDate ? genNoAppointmentMsg(modalAl.name, cf.date, cf.nextDate, msgModal.hour) : "";
+                    return (
+                      <div key={cf.date} className={"border border-amber-200 rounded-lg p-3 " + (isPast ? "bg-gray-50 opacity-60" : "bg-amber-50")}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <span className="text-sm font-medium">{fmtDateES(cf.date)}</span>
+                            <span className="text-xs text-gray-400 ml-2">{dt.getDate()}/{dt.getMonth() + 1}/{dt.getFullYear()}</span>
+                            <span className="text-xs text-amber-700 ml-2">{icon} {cf.bloqueo.name}{cf.bloqueo.session ? " (" + cf.bloqueo.session + ")" : ""}</span>
+                            {isPast && <span className="text-xs text-gray-400 ml-2">(pasada)</span>}
+                          </div>
+                          {noMsg && !isPast && <CopyBtn text={noMsg} label="Copiar aviso" />}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            <hr className="border-gray-200" />
+
+            <div>
+              <h4 className="font-semibold text-sm mb-2" style={{ color: "#1F2A5C" }}>Mensajes semanales al alumno</h4>
+              <p className="text-xs text-gray-500 mb-3">Las reagendadas se marcan en morado, bloqueos en naranja. El # de sesión se recorre.</p>
+              <div className="space-y-2 max-h-96 overflow-y-auto">
+                {(function() {
+                  var sesNum = 0;
+                  var allAsuetos = data.asuetos || [];
+                  return modalDates.map(function(dateStr, i) {
+                    var dt = new Date(dateStr + "T12:00:00");
+                    var isPast = new Date(dateStr + "T23:59:59") < new Date();
+                    var conflict = conflictDateSet[dateStr];
+                    var wasReag = isReagendada(msgModal, dateStr);
+                    var asueto = allAsuetos.find(function(a) { return a.date === dateStr; });
+
+                    /* Find next valid date (not asueto, not reagendada, not blocked) */
+                    function findNextValid(fromIdx) {
+                      for (var j = fromIdx + 1; j < modalDates.length; j++) {
+                        var nd = modalDates[j];
+                        if (!isReagendada(msgModal, nd) && !allAsuetos.find(function(a) { return a.date === nd; }) && !conflictDateSet[nd]) return nd;
+                      }
+                      return null;
+                    }
+                    var nextValidDate = findNextValid(i);
+
+                    /* Asueto */
+                    if (asueto) {
+                      var aMsg = modalAl ? ("Hola " + modalAl.name + " buenos días, te informamos que el día " + fmtDateES(dateStr) + " no habrá servicio en el departamento por " + asueto.name + "." + (nextValidDate ? "\n\nTu siguiente cita queda para el día " + fmtDateES(nextValidDate) + " a la " + fmtH12(msgModal.hour) + "." : "") + "\n\nCualquier duda estamos a tus órdenes.") : "";
+                      return (
+                        <div key={dateStr} className={"border border-red-300 rounded-lg p-3 " + (isPast ? "bg-gray-50 opacity-60" : "bg-red-50")}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="text-xs font-medium px-2 py-0.5 rounded-full mr-2 bg-red-200 text-red-800">🏖️ Asueto</span>
+                              <span className="text-sm font-medium">{fmtDateES(dateStr)}</span>
+                            </div>
+                            {!isPast && <CopyBtn text={aMsg} label="Copiar aviso" />}
+                          </div>
+                          <p className="text-xs text-red-700 mt-1">{asueto.name}</p>
+                        </div>
+                      );
+                    }
+
+                    /* Reagendada */
+                    if (wasReag) {
+                      return (
+                        <div key={dateStr} className={"border border-purple-300 rounded-lg p-3 " + (isPast ? "bg-gray-50 opacity-60" : "bg-purple-50")}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="text-xs font-medium px-2 py-0.5 rounded-full mr-2 bg-purple-200 text-purple-800">📅 Reagendada</span>
+                              <span className="text-sm font-medium">{fmtDateES(dateStr)}</span>
+                              <span className="text-xs text-gray-400 ml-2">{dt.getDate()}/{dt.getMonth() + 1}/{dt.getFullYear()}</span>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    /* Bloqueo */
+                    if (conflict) {
+                      var noMsg = conflict.nextDate ? genNoAppointmentMsg(modalAl.name, dateStr, conflict.nextDate, msgModal.hour) : "";
+                      return (
+                        <div key={dateStr} className={"border border-amber-300 rounded-lg p-3 " + (isPast ? "bg-gray-50 opacity-60" : "bg-amber-50")}>
+                          <div className="flex items-center justify-between gap-2">
+                            <div>
+                              <span className="text-xs font-medium px-2 py-0.5 rounded-full mr-2 bg-amber-200 text-amber-800">🚫 Bloqueo</span>
+                              <span className="text-sm font-medium">{fmtDateES(dateStr)}</span>
+                            </div>
+                            {noMsg && !isPast && <CopyBtn text={noMsg} label="Copiar aviso" />}
+                          </div>
+                          <p className="text-xs text-amber-700 mt-1">{conflict.bloqueo.type === "taller" ? "📋" : "🎓"} {conflict.bloqueo.name}</p>
+                        </div>
+                      );
+                    }
+
+                    /* Normal session */
+                    var label = sesNum === 0 ? "PRE" : "S" + sesNum;
+                    sesNum++;
+                    var msg = genStudentMsg(modalAl.name, dateStr, msgModal.hour);
+
+                    return (
+                      <div key={dateStr} className={"border rounded-lg p-3 " + (isPast ? "border-gray-200 bg-gray-50 opacity-60" : "border-gray-200")}>
+                        <div className="flex items-center justify-between gap-2">
+                          <div>
+                            <span className={"text-xs font-medium px-2 py-0.5 rounded-full mr-2 " + (label === "PRE" ? "bg-purple-100 text-purple-700" : "bg-gray-100 text-gray-600")}>{label}</span>
+                            <span className="text-sm font-medium">{fmtDateES(dateStr)}</span>
+                            <span className="text-xs text-gray-400 ml-2">{dt.getDate()}/{dt.getMonth() + 1}/{dt.getFullYear()}</span>
+                          </div>
+                          {!isPast && <CopyBtn text={msg} label="Copiar" />}
+                        </div>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+      <Modal open={faltaModal !== null} onClose={function() { setFaltaModal(null); }} title="Registrar falta">
+        {faltaModal && (function() {
+          var fal = data.alumnos.find(function(a) { return a.id === faltaModal.alumnoId; });
+          var currentFaltas = faltaModal.faltas || 0;
+          var nextFaltas = currentFaltas + 1;
+          var nextDates = getWeeklyDates(faltaModal.firstDate, 20);
+          var nextFutureDate = nextDates.find(function(d) { return new Date(d + "T12:00:00") > new Date(); });
+          var faltaMsg = fal ? genFaltaMsg(fal.name, nextFaltas, nextFutureDate || "", faltaModal.hour) : "";
+          return fal ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+                <p className="font-semibold">{fal.name}</p>
+                <p className="text-blue-700 mt-0.5">{faltaModal.day} {fmtH12(faltaModal.hour)} · Faltas actuales: {currentFaltas}/3</p>
+              </div>
+              {nextFaltas >= 3 && (
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm text-red-800">
+                  <p className="font-medium">⚠️ Esta será la falta #3 — la cita se dará de baja automáticamente.</p>
+                </div>
+              )}
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-semibold text-sm" style={{ color: "#1F2A5C" }}>Mensaje para el alumno</h4>
+                  <CopyBtn text={faltaMsg} label="Copiar mensaje" />
+                </div>
+                <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm whitespace-pre-wrap font-sans text-gray-700 leading-relaxed">{faltaMsg}</pre>
+              </div>
+              <div className="flex justify-between gap-3 pt-3 border-t">
+                <div>
+                  {currentFaltas > 0 && (
+                    <button onClick={function() { quitarFalta(faltaModal.id); setFaltaModal(null); }} className="px-4 py-2 rounded-lg text-sm text-amber-600 hover:bg-amber-50 cursor-pointer border border-amber-200">
+                      Quitar 1 falta ({currentFaltas} → {currentFaltas - 1})
+                    </button>
+                  )}
+                </div>
+                <div className="flex gap-3">
+                  <button onClick={function() { setFaltaModal(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+                  <button onClick={function() { registrarFalta(faltaModal.id); setFaltaModal(null); }} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#B22222" }}>
+                    Registrar falta #{nextFaltas}
+                  </button>
+                </div>
+              </div>
+            </div>
+          ) : null;
+        })()}
+      </Modal>
+
+      <Modal open={reagendarModal !== null} onClose={function() { setReagendarModal(null); }} title="Reagendar sesión">
+        {reagendarModal && (function() {
+          var ral = data.alumnos.find(function(a) { return a.id === reagendarModal.alumnoId; });
+          var allDates = getWeeklyDates(reagendarModal.firstDate, 20);
+          var futureDates = allDates.filter(function(d) { return new Date(d + "T23:59:59") >= new Date(); });
+          var selectedDate = reagendarFecha || (futureDates.length > 0 ? futureDates[0] : "");
+          var nextAfter = futureDates.find(function(d) { return d > selectedDate && !isReagendada(reagendarModal, d); });
+          var nextDateObj = nextAfter ? new Date(nextAfter + "T12:00:00") : null;
+          var nextFullDate = nextAfter ? (fmtDateES(nextAfter) + " de " + MONTH_NAMES[nextDateObj.getMonth()]) : "";
+          var horaTxt = fmtH12(reagendarModal.hour);
+          var fechaOriginal = fmtDateES(selectedDate);
+
+          var siguienteCita = nextAfter ? ("\n\nTu siguiente cita queda agendada para el día " + nextFullDate + " a la " + horaTxt + " en el Departamento de Orientación Psicopedagógica.\n\nEs importante que asistas a tu cita en el día y hora indicados.\n\nCualquier duda estamos a tus órdenes.\n\nFAVOR DE RESPONDER ESTE MENSAJE DE ENTERADO.") : "\n\nTe contactaremos para reagendar tu cita.\n\nCualquier duda estamos a tus órdenes.";
+
+          var reagMsg = "";
+          if (ral) {
+            if (reagendarMotivo === "alumno") {
+              reagMsg = "Hola " + ral.name + " buenos días, recibimos tu aviso. Tu cita del día " + fechaOriginal + " a la " + horaTxt + " en el departamento queda cancelada para esta semana." + siguienteCita;
+            } else if (reagendarMotivo === "practicante") {
+              reagMsg = "Hola " + ral.name + " buenos días, te informamos que por temas administrativos tu cita programada para el día " + fechaOriginal + " a la " + horaTxt + " no se podrá llevar a cabo esta semana." + siguienteCita;
+            } else if (reagendarMotivo === "emergencia") {
+              reagMsg = "Hola " + ral.name + " buenos días, te informamos que tu cita del día de hoy a la " + horaTxt + " no se podrá llevar a cabo por cuestiones de fuerza mayor." + siguienteCita;
+            }
+          }
+          var reagCount = getReagendadasCount(reagendarModal);
+          return ral ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+                <p className="font-semibold">{ral.name}</p>
+                <p className="text-blue-700 mt-0.5">{reagendarModal.day} {fmtH12(reagendarModal.hour)} · {reagCount} reagendada(s) previas</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Fecha que se reagenda</label>
+                <select value={selectedDate} onChange={function(e) { setReagendarFecha(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  {futureDates.map(function(d) {
+                    var already = isReagendada(reagendarModal, d);
+                    var dObj = new Date(d + "T12:00:00");
+                    return <option key={d} value={d} disabled={already}>{fmtDateES(d)} ({dObj.getDate()}/{dObj.getMonth() + 1}){already ? " — ya reagendada" : ""}</option>;
+                  })}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Motivo</label>
+                <select value={reagendarMotivo} onChange={function(e) { setReagendarMotivo(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="alumno">El alumno avisó con anticipación</option>
+                  <option value="practicante">El practicante no puede</option>
+                  <option value="emergencia">Emergencia (mismo día/semana)</option>
+                </select>
+                <p className="text-xs text-gray-500 mt-1">No cuenta como falta. El # de sesión se recorre.</p>
+              </div>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="font-semibold text-sm" style={{ color: "#1F2A5C" }}>Mensaje para el alumno</h4>
+                  <CopyBtn text={reagMsg} label="Copiar mensaje" />
+                </div>
+                <pre className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm whitespace-pre-wrap font-sans text-gray-700 leading-relaxed">{reagMsg}</pre>
+              </div>
+              <div className="flex justify-end gap-3 pt-3 border-t">
+                <button onClick={function() { setReagendarModal(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+                <button onClick={function() { reagendar(reagendarModal.id, selectedDate); }} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Registrar reagenda</button>
+              </div>
+            </div>
+          ) : null;
+        })()}
+      </Modal>
+
+      <Modal open={bajaModal !== null} onClose={function() { setBajaModal(null); }} title="Dar de baja / Alta / Canalización">
+        {bajaModal && (function() {
+          var bal = data.alumnos.find(function(a) { return a.id === bajaModal.alumnoId; });
+          return bal ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+                <p className="font-semibold">{bal.name}</p>
+                <p className="text-blue-700 mt-0.5">{bajaModal.day} {fmtH12(bajaModal.hour)}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-2">Motivo</label>
+                <div className="space-y-2">
+                  {[["alta", "🟢 Alta — Completó su proceso"], ["canalizada", "🔵 Canalización — Referido a otra instancia"], ["baja_manual", "🔴 Baja — Otros motivos"]].map(function(opt) {
+                    return (
+                      <label key={opt[0]} className={"flex items-center gap-2 p-3 rounded-lg border cursor-pointer " + (bajaStatus === opt[0] ? "border-blue-400 bg-blue-50" : "border-gray-200 hover:bg-gray-50")}>
+                        <input type="radio" checked={bajaStatus === opt[0]} onChange={function() { setBajaStatus(opt[0]); }} />
+                        <span className="text-sm">{opt[1]}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div className="flex justify-end gap-3 pt-3 border-t">
+                <button onClick={function() { setBajaModal(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+                <button onClick={function() { deactivateWithStatus(bajaModal.id, bajaStatus); }} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#B22222" }}>Confirmar</button>
+              </div>
+            </div>
+          ) : null;
+        })()}
+      </Modal>
+
+      <Modal open={calModal} onClose={function() { setCalModal(false); }} title="📸 Calendario semanal" wide={true}>
+        <div className="space-y-4">
+          <div className="flex gap-3 items-end flex-wrap">
+            <div className="flex-1 min-w-[200px]">
+              <label className="block text-sm font-medium text-gray-700 mb-1">Lunes de la semana</label>
+              <input type="date" value={calMonday} onChange={function(e) { setCalMonday(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            {calMonday && (
+              <button onClick={function() { downloadCalPNG(); }} className="px-4 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>
+                ⬇ Descargar imagen
+              </button>
+            )}
+          </div>
+
+          {calMonday && (function() {
+            var weekDates = getWeekDates(calMonday);
+            var dayHeaders = weekDates.map(function(dateStr, i) {
+              var d = new Date(dateStr + "T12:00:00");
+              return DAYS[i] + " " + d.getDate();
+            });
+            var calItems = buildCalItems(weekDates, active, data);
+            var activeHours = calItems.activeHours;
+            var grid = calItems.grid;
+
+            return (
+              <div>
+                <div className="flex flex-wrap gap-2 mb-3">
+                  {data.practicantes.map(function(p) {
+                    var co = PRAC_COLORS[p.id] || { bg: "#ccc", text: "#000" };
+                    return <span key={p.id} className="px-2 py-1 rounded text-xs font-bold" style={{ background: co.bg, color: co.text }}>{p.name.split(" ")[0]}</span>;
+                  })}
+                </div>
+                <div className="overflow-x-auto">
+                  <canvas ref={function(el) { if (el) drawCalCanvas(el, dayHeaders, activeHours, grid, data); }} style={{ width: "100%", maxHeight: 600 }}></canvas>
+                </div>
+                <p className="text-xs text-gray-400 mt-2">Dale "Descargar imagen" para obtener el PNG y enviarlo por Teams/WhatsApp.</p>
+              </div>
+            );
+          })()}
+        </div>
+      </Modal>
+
+      <Modal open={citaAccion !== null} onClose={function() { setCitaAccion(null); }} title="Acciones de cita">
+        {citaAccion && (function() {
+          var cal = data.alumnos.find(function(a) { return a.id === citaAccion.alumnoId; });
+          var cpr = data.practicantes.find(function(p) { return p.id === citaAccion.practicanteId; });
+          var cColor = PRAC_COLORS[citaAccion.practicanteId] || { bg: "#ccc" };
+          return cal ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+                <div className="flex items-center gap-2">
+                  <span className="w-3 h-3 rounded-full" style={{ background: cColor.bg }}></span>
+                  <p className="font-semibold">{cal.name}</p>
+                </div>
+                <p className="text-blue-700 mt-0.5 ml-5">{citaAccion.day} {fmtH12(citaAccion.hour)} → {cpr ? cpr.name.split(" ")[0] : ""}</p>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                <button onClick={function() { setCitaAccion(null); setMsgModal(citaAccion); }} className="p-3 rounded-lg border border-blue-200 text-blue-600 hover:bg-blue-50 cursor-pointer text-sm font-medium text-center">💬 Mensajes</button>
+                <button onClick={function() { setCitaAccion(null); setCambiarModal(citaAccion); setNuevoPrac(""); }} className="p-3 rounded-lg border border-purple-200 text-purple-600 hover:bg-purple-50 cursor-pointer text-sm font-medium text-center">🔄 Cambiar practicante</button>
+                <button onClick={function() { setCitaAccion(null); setReagendarModal(citaAccion); setReagendarMotivo("alumno"); setReagendarFecha(""); }} className="p-3 rounded-lg border border-indigo-200 text-indigo-600 hover:bg-indigo-50 cursor-pointer text-sm font-medium text-center">📅 Reagendar</button>
+                <button onClick={function() { setCitaAccion(null); setFaltaModal(citaAccion); }} className="p-3 rounded-lg border border-amber-200 text-amber-600 hover:bg-amber-50 cursor-pointer text-sm font-medium text-center">⚠ Falta</button>
+                <button onClick={function() { setCitaAccion(null); setCambiarInicioModal(citaAccion); setNuevaFechaInicio(citaAccion.firstDate || ""); }} className="p-3 rounded-lg border border-teal-200 text-teal-600 hover:bg-teal-50 cursor-pointer text-sm font-medium text-center">📆 Cambiar inicio</button>
+                <button onClick={function() { setCitaAccion(null); setBajaModal(citaAccion); setBajaStatus("baja_manual"); }} className="p-3 rounded-lg border border-red-200 text-red-600 hover:bg-red-50 cursor-pointer text-sm font-medium text-center col-span-2">✕ Baja / Alta / Canalización</button>
+              </div>
+            </div>
+          ) : null;
+        })()}
+      </Modal>
+
+      <Modal open={cancelDiaModal} onClose={function() { setCancelDiaModal(false); }} title="❌ Cancelar citas del día">
+        <div className="space-y-4">
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">Fecha a cancelar</label>
+            <input type="date" value={cancelDiaFecha} onChange={function(e) { setCancelDiaFecha(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+          </div>
+          {(function() {
+            if (!cancelDiaFecha) return null;
+            var citasCancel = getCitasForDate(cancelDiaFecha);
+            if (citasCancel.length === 0) {
+              return <p className="text-sm text-gray-400">No hay citas activas para ese día.</p>;
+            }
+            var dd = new Date(cancelDiaFecha + "T12:00:00");
+            var fechaLarga = DAY_MAP[dd.getDay()] + " " + dd.getDate() + " de " + MONTH_NAMES[dd.getMonth()];
+            return (
+              <div className="space-y-3">
+                <div className="p-3 rounded-lg bg-red-50 border border-red-200 text-sm">
+                  <p className="font-semibold text-red-700">{citasCancel.length} cita(s) el {fechaLarga}</p>
+                </div>
+                <h4 className="font-semibold text-sm" style={{ color: "#1F2A5C" }}>Mensajes para los alumnos</h4>
+                {citasCancel.map(function(c) {
+                  var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+                  var pr = data.practicantes.find(function(p) { return p.id === c.practicanteId; });
+                  if (!al) return null;
+                  var hora = fmtH12(c.hour);
+                  var msg = "Hola " + al.name + " buenas tardes, te informamos que tu cita del día " + fechaLarga + " a la " + hora + " no se llevará a cabo por motivos administrativos.\n\nTe estaremos contactando para reagendar tu cita lo más pronto posible.\n\nCualquier duda estamos a tus órdenes.";
+                  var prColor = PRAC_COLORS[c.practicanteId] || { bg: "#ccc" };
+                  return (
+                    <div key={c.id} className="border border-gray-200 rounded-lg p-3">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2">
+                          <span className="w-2.5 h-2.5 rounded-full" style={{ background: prColor.bg }}></span>
+                          <p className="font-medium text-sm">{al.name}</p>
+                          <span className="text-xs text-gray-400">{hora} — {pr ? pr.name.split(" ")[0] : ""}</span>
+                        </div>
+                        <CopyBtn text={msg} label="Copiar" />
+                      </div>
+                      <pre className="bg-gray-50 rounded p-2 text-xs whitespace-pre-wrap font-sans text-gray-600 leading-relaxed">{msg}</pre>
+                    </div>
+                  );
+                })}
+              </div>
+            );
+          })()}
+          {(function() {
+            var citasCancel = getCitasForDate(cancelDiaFecha);
+            if (citasCancel.length === 0 || !cancelDiaFecha) return (
+              <div className="flex justify-end pt-3 border-t">
+                <button onClick={function() { setCancelDiaModal(false); }} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Cerrar</button>
+              </div>
+            );
+            return (
+              <div className="pt-3 border-t space-y-2">
+                {cancelDiaApplied ? (
+                  <div className="p-2 rounded bg-green-50 border border-green-200 text-sm text-green-700 text-center font-medium">✅ Cancelación aplicada al calendario</div>
+                ) : (
+                  <p className="text-xs text-gray-500">⚠️ Aplica la cancelación para que se refleje en la imagen del calendario semanal.</p>
+                )}
+                <div className="flex justify-end gap-3">
+                  {!cancelDiaApplied && (
+                    <ConfirmBtn onConfirm={applyCancelDia} label="📅 Aplicar al calendario" confirmLabel="¿Segura?" />
+                  )}
+                  <button onClick={function() { setCancelDiaModal(false); }} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Cerrar</button>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      </Modal>
+
+            <Modal open={bulkReagModal} onClose={function() { setBulkReagModal(false); setBulkReagDone(null); }} title="Reagendar en bloque">
+        {bulkReagDone ? (
+          <div className="space-y-4">
+            <div className="p-3 rounded-lg bg-green-50 border border-green-200 text-sm">
+              <p className="font-semibold text-green-700">✅ {bulkReagDone.count} cita(s) reagendada(s)</p>
+              <p className="text-green-600 mt-1">Próxima semana: {fmtDateES(bulkReagDone.nextDate)}</p>
+            </div>
+            <div className="space-y-3">
+              <h4 className="font-semibold text-sm" style={{ color: "#1F2A5C" }}>Mensajes para los alumnos</h4>
+              {bulkReagDone.msgs.map(function(m, idx) {
+                return (
+                  <div key={idx} className="border border-gray-200 rounded-lg p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <p className="font-medium text-sm">{m.alumno}</p>
+                      <CopyBtn text={m.msg} label="Copiar" />
+                    </div>
+                    <pre className="bg-gray-50 rounded p-2 text-xs whitespace-pre-wrap font-sans text-gray-600 leading-relaxed">{m.msg}</pre>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex justify-end pt-3 border-t">
+              <button onClick={function() { setBulkReagModal(false); setBulkReagDone(null); }} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Cerrar</button>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Tipo de reagenda</label>
+              <select value={bulkReagTipo} onChange={function(e) { setBulkReagTipo(e.target.value); setBulkReagPrac(""); setBulkReagDay(""); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                <option value="practicante">Por practicante + día</option>
+                <option value="dia">Todas las citas de un día</option>
+              </select>
+            </div>
+            {bulkReagTipo === "practicante" && (
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Practicante</label>
+                <select value={bulkReagPrac} onChange={function(e) { setBulkReagPrac(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">Seleccionar...</option>
+                  {data.practicantes.map(function(p) {
+                    return <option key={p.id} value={p.id}>{p.name}</option>;
+                  })}
+                </select>
+              </div>
+            )}
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Día de la semana</label>
+              <select value={bulkReagDay} onChange={function(e) { setBulkReagDay(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                <option value="">Seleccionar...</option>
+                {DAYS.map(function(d) {
+                  return <option key={d} value={d}>{d}</option>;
+                })}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-1">Fecha que se reagenda</label>
+              <input type="date" value={bulkReagFecha} onChange={function(e) { setBulkReagFecha(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+            </div>
+            {(function() {
+              var preview = getBulkCitas();
+              if (preview.length === 0 && (bulkReagDay || bulkReagPrac)) {
+                return <p className="text-sm text-gray-400">No hay citas que coincidan.</p>;
+              }
+              if (preview.length > 0) {
+                return (
+                  <div className="p-3 rounded-lg bg-orange-50 border border-orange-200 text-sm">
+                    <p className="font-semibold text-orange-700">{preview.length} cita(s) serán reagendadas:</p>
+                    <ul className="mt-1 space-y-0.5">
+                      {preview.map(function(c) {
+                        var al = data.alumnos.find(function(a) { return a.id === c.alumnoId; });
+                        return <li key={c.id} className="text-orange-600">• {al ? al.name : "?"} — {c.day} {fmtH12(c.hour)}</li>;
+                      })}
+                    </ul>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+            <div className="flex justify-end gap-3 pt-3 border-t">
+              <button onClick={function() { setBulkReagModal(false); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+              <button onClick={executeBulkReagendar} disabled={getBulkCitas().length === 0 || !bulkReagFecha} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer disabled:opacity-40" style={{ background: "#1F2A5C" }}>Reagendar todas</button>
+            </div>
+          </div>
+        )}
+      </Modal>
+
+            <Modal open={cambiarInicioModal !== null} onClose={function() { setCambiarInicioModal(null); }} title="Cambiar fecha de inicio">
+        {cambiarInicioModal && (function() {
+          var alCI = data.alumnos.find(function(a) { return a.id === cambiarInicioModal.alumnoId; });
+          var prCI = data.practicantes.find(function(p) { return p.id === cambiarInicioModal.practicanteId; });
+          return alCI ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+                <p className="font-semibold">{alCI.name}</p>
+                <p className="text-blue-700 mt-0.5">{cambiarInicioModal.day} {fmtH12(cambiarInicioModal.hour)} → {prCI ? prCI.name.split(" ")[0] : ""}</p>
+                <p className="text-blue-600 mt-0.5">Inicio actual: {fmtDateES(cambiarInicioModal.firstDate)}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nueva fecha de inicio</label>
+                <input type="date" value={nuevaFechaInicio} onChange={function(e) { setNuevaFechaInicio(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" />
+                {nuevaFechaInicio && nuevaFechaInicio !== cambiarInicioModal.firstDate && (
+                  <p className="text-xs text-teal-600 mt-1">→ Nueva primera cita: {fmtDateES(nuevaFechaInicio)}</p>
+                )}
+              </div>
+              <div className="flex justify-end gap-3 pt-3 border-t">
+                <button onClick={function() { setCambiarInicioModal(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+                <button onClick={cambiarFechaInicio} disabled={!nuevaFechaInicio || nuevaFechaInicio === cambiarInicioModal.firstDate} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer disabled:opacity-40" style={{ background: "#1F2A5C" }}>Cambiar fecha</button>
+              </div>
+            </div>
+          ) : null;
+        })()}
+      </Modal>
+
+            <Modal open={cambiarModal !== null} onClose={function() { setCambiarModal(null); }} title="Cambiar practicante">
+        {cambiarModal && (function() {
+          var alCambiar = data.alumnos.find(function(a) { return a.id === cambiarModal.alumnoId; });
+          var prActual = data.practicantes.find(function(p) { return p.id === cambiarModal.practicanteId; });
+          var otrosPracs = data.practicantes.filter(function(p) { return p.id !== cambiarModal.practicanteId; });
+          return alCambiar ? (
+            <div className="space-y-4">
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+                <p className="font-semibold">{alCambiar.name}</p>
+                <p className="text-blue-700 mt-0.5">{cambiarModal.day} {fmtH12(cambiarModal.hour)}</p>
+                <p className="text-gray-500 mt-0.5">Practicante actual: {prActual ? prActual.name : "—"}</p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Nuevo practicante</label>
+                <select value={nuevoPrac} onChange={function(e) { setNuevoPrac(e.target.value); }} className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">Elegir...</option>
+                  {otrosPracs.map(function(p) {
+                    var oficTxt = p.propiaOficina ? " ★ oficina propia" : "";
+                    return <option key={p.id} value={p.id}>{p.name}{oficTxt}</option>;
+                  })}
+                </select>
+              </div>
+              <div className="flex justify-end gap-3 pt-3 border-t">
+                <button onClick={function() { setCambiarModal(null); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+                <button onClick={cambiarPracticante} disabled={!nuevoPrac} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer disabled:opacity-40" style={{ background: "#1F2A5C" }}>Cambiar practicante</button>
+              </div>
+            </div>
+          ) : null;
+        })()}
+      </Modal>
+    </div>
+  );
+}
+
+/* ── HISTORIAL ── */
+
+function HistorialTab({ data, onSave, toast }) {
+  const [filter, setFilter] = useState("todos");
+  const [filterPrac, setFilterPrac] = useState("");
+  const [search, setSearch] = useState("");
+
+  var statusLabels = { alta: "Alta", canalizada: "Canalizada", baja_manual: "Baja", baja_faltas: "Baja por faltas", sin_cupo: "Sin cupo", reactivada: "Reactivada" };
+  var statusIcons = { alta: "🟢", canalizada: "🔵", baja_manual: "🔴", baja_faltas: "🔴", sin_cupo: "⚪", activa: "✅", reactivada: "🟡" };
+
+  function reactivar(alumnoId) {
+    var updatedCitas = data.citas.map(function(c) {
+      if (c.alumnoId !== alumnoId) return c;
+      if (!c.active && (c.status === "alta" || c.status === "baja_manual" || c.status === "baja_faltas" || c.status === "canalizada")) {
+        return { ...c, status: "reactivada" };
+      }
+      return c;
+    });
+    onSave({ ...data, citas: updatedCitas });
+    toast("Paciente reactivado — ya puede recibir cita nueva");
+  }
+
+  /* Build unique records: one per alumno, most relevant cita */
+  var records = useMemo(function() {
+    var result = [];
+    data.alumnos.forEach(function(al) {
+      var citasAlumno = data.citas.filter(function(c) { return c.alumnoId === al.id; });
+      var activeCita = citasAlumno.find(function(c) { return c.active; });
+
+      if (activeCita) {
+        var pr = data.practicantes.find(function(p) { return p.id === activeCita.practicanteId; });
+        result.push({
+          alumno: al, cita: activeCita, practicante: pr,
+          estado: "activa", faltas: activeCita.faltas || 0, reagendadas: activeCita.reagendadas || 0
+        });
+      } else if (citasAlumno.length > 0) {
+        /* Most recent inactive cita */
+        var sorted = citasAlumno.slice().sort(function(a, b) { return a.firstDate > b.firstDate ? -1 : 1; });
+        var lastCita = sorted[0];
+        var pr2 = data.practicantes.find(function(p) { return p.id === lastCita.practicanteId; });
+        result.push({
+          alumno: al, cita: lastCita, practicante: pr2,
+          estado: lastCita.status || "baja_manual", faltas: lastCita.faltas || 0, reagendadas: lastCita.reagendadas || 0
+        });
+      } else {
+        /* Sin cita = sin cupo */
+        result.push({
+          alumno: al, cita: null, practicante: null,
+          estado: "sin_cupo", faltas: 0, reagendadas: 0
+        });
+      }
+    });
+    return result;
+  }, [data]);
+
+  var filtered = records.filter(function(r) {
+    if (filter !== "todos") {
+      if (filter === "activas" && r.estado !== "activa") return false;
+      if (filter === "inactivas" && r.estado === "activa") return false;
+      if (filter === "alta" && r.estado !== "alta") return false;
+      if (filter === "baja" && r.estado !== "baja_manual" && r.estado !== "baja_faltas") return false;
+      if (filter === "canalizada" && r.estado !== "canalizada") return false;
+      if (filter === "sin_cupo" && r.estado !== "sin_cupo") return false;
+    }
+    if (filterPrac) {
+      if (!r.cita || r.cita.practicanteId !== filterPrac) return false;
+    }
+    if (search) {
+      var q = search.toLowerCase();
+      if (!r.alumno.name.toLowerCase().includes(q) && !r.alumno.matricula.includes(q)) return false;
+    }
+    return true;
+  });
+
+  function cleanCell(text) {
+    if (text === null || text === undefined) return "";
+    return String(text).replace(/[\t\n\r]+/g, " ").replace(/"/g, "'").trim();
+  }
+
+  function downloadExcel() {
+    var headers = ["Nombre", "Matrícula", "Carrera", "Motivo de consulta", "Modalidad", "Practicante", "Día", "Hora", "Estado", "Faltas", "Reagendadas"];
+    var rows = [headers.join(",")];
+    var list = filterPrac ? filtered : records;
+    list.forEach(function(r) {
+      var estadoTxt = r.estado === "activa" ? "Activa" : (statusLabels[r.estado] || "Inactiva");
+      var row = [
+        '"' + cleanCell(r.alumno.name) + '"',
+        cleanCell(r.alumno.matricula),
+        '"' + cleanCell(r.alumno.carrera) + '"',
+        '"' + cleanCell(r.alumno.motivoConsulta) + '"',
+        r.alumno.enLinea ? "En línea" : "Presencial",
+        '"' + cleanCell(r.practicante ? r.practicante.name : "") + '"',
+        cleanCell(r.cita ? r.cita.day : ""),
+        cleanCell(r.cita ? fmtH12(r.cita.hour) : ""),
+        estadoTxt,
+        String(r.faltas),
+        String(r.reagendadas)
+      ];
+      rows.push(row.join(","));
+    });
+    var csvContent = "\uFEFF" + rows.join("\n");
+    var blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    a.href = url;
+    a.download = "citas_dop_limpio.csv";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
+  var countByStatus = {};
+  records.forEach(function(r) {
+    countByStatus[r.estado] = (countByStatus[r.estado] || 0) + 1;
+  });
+
+  return (
+    <div>
+      <div className="flex flex-wrap gap-2 mb-4 items-center">
+        <input value={search} onChange={function(e) { setSearch(e.target.value); }} placeholder="Buscar paciente..." className="border border-gray-300 rounded-lg px-3 py-2 text-sm flex-1 min-w-[140px]" />
+        <select value={filter} onChange={function(e) { setFilter(e.target.value); }} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <option value="todos">Todos ({records.length})</option>
+          <option value="activas">✅ Activas ({countByStatus["activa"] || 0})</option>
+          <option value="sin_cupo">⚪ Sin cupo ({countByStatus["sin_cupo"] || 0})</option>
+          <option value="alta">🟢 Alta ({countByStatus["alta"] || 0})</option>
+          <option value="baja">🔴 Baja ({(countByStatus["baja_manual"] || 0) + (countByStatus["baja_faltas"] || 0)})</option>
+          <option value="canalizada">🔵 Canalizada ({countByStatus["canalizada"] || 0})</option>
+        </select>
+        <select value={filterPrac} onChange={function(e) { setFilterPrac(e.target.value); }} className="border border-gray-300 rounded-lg px-3 py-2 text-sm">
+          <option value="">Todos</option>
+          {data.practicantes.map(function(p) { return <option key={p.id} value={p.id}>{p.name.split(" ")[0]}</option>; })}
+        </select>
+        <button onClick={downloadExcel} className="px-3 py-2 rounded-lg text-white text-xs font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>
+          ⬇ citas_dop_limpio.csv
+        </button>
+      </div>
+
+      <p className="text-xs text-gray-500 mb-3">{filtered.length} paciente(s) sin duplicados. El CSV se abre directo en Excel/Sheets.</p>
+
+      <div className="space-y-1.5">
+        {filtered.map(function(r, idx) {
+          var prColor = r.cita ? (PRAC_COLORS[r.cita.practicanteId] || { bg: "#ccc" }) : { bg: "#ddd" };
+          var icon = statusIcons[r.estado] || "⚪";
+          var label = r.estado === "activa" ? "Activa" : (statusLabels[r.estado] || "—");
+          return (
+            <div key={r.alumno.id + "-" + idx} className={"border rounded-lg p-3 text-sm " + (r.estado === "activa" ? "border-gray-200" : "border-gray-100 bg-gray-50/50")}>
+              <div className="flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-3 h-3 rounded-full shrink-0" style={{ background: prColor.bg }}></span>
+                  <span className="font-semibold truncate" style={{ color: "#1F2A5C" }}>{r.alumno.name}</span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span className="text-xs">{icon} {label}</span>
+                  {(r.estado === "alta" || r.estado === "baja_manual" || r.estado === "baja_faltas" || r.estado === "canalizada") && (
+                    <button onClick={function() { reactivar(r.alumno.id); }} className="px-2 py-1 text-xs rounded border border-yellow-300 text-yellow-700 hover:bg-yellow-50 cursor-pointer">Reactivar</button>
+                  )}
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-3 mt-1 text-xs text-gray-500 ml-5">
+                <span>{r.alumno.matricula}</span>
+                <span className="truncate" style={{ maxWidth: 200 }}>{r.alumno.carrera}</span>
+                {r.cita && <span>{r.cita.day} {fmtH12(r.cita.hour)}</span>}
+                {r.practicante && <span>→ {r.practicante.name.split(" ")[0]}</span>}
+                {r.faltas > 0 && <span className="text-red-500">{r.faltas} falta(s)</span>}
+                {r.reagendadas > 0 && <span className="text-purple-500">{r.reagendadas} reag.</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function App() {
+  const [data, setData] = useState({ practicantes: [], alumnos: [], citas: [], bloqueos: [], asuetos: [] });
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState("practicantes");
+  const [toastMsg, setToastMsg] = useState("");
+  const _dbRef = useRef(null);
+  const _skipSnap = useRef(false);
+
+  useEffect(function() {
+    var unsubscribe = null;
+    var loadTimer = null;
+
+    async function init() {
+      var db = window._firestoreDb || null;
+
+      if (db) {
+        _dbRef.current = db;
+        var docRef = db.doc("config/main");
+
+        loadTimer = setTimeout(function() {
+          fallbackLoad();
+        }, 10000);
+
+        unsubscribe = docRef.onSnapshot(function(snap) {
+          if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
+          if (_skipSnap.current) { _skipSnap.current = false; return; }
+          if (snap.exists) {
+            var d = JSON.parse(JSON.stringify(snap.data()));
+            if (!d.practicantes) d.practicantes = [];
+            if (!d.alumnos) d.alumnos = [];
+            if (!d.citas) d.citas = [];
+            if (!d.bloqueos) d.bloqueos = [];
+            if (!d.asuetos) d.asuetos = [];
+            setData(d);
+          } else {
+            var seed = { practicantes: INIT_PRACS, alumnos: [], citas: [], bloqueos: INIT_BLOQUEOS, asuetos: [] };
+            docRef.set(seed).catch(function(e) { console.error("seed error:", e); });
+            setData(seed);
+          }
+          setLoading(false);
+        }, function(err) {
+          console.error("db error:", err);
+          if (loadTimer) { clearTimeout(loadTimer); loadTimer = null; }
+          fallbackLoad();
+        });
+      } else {
+        fallbackLoad();
+      }
+    }
+
+    function fallbackLoad() {
+      try {
+        var val = localStorage.getItem(KEY);
+        if (val) {
+          setData(JSON.parse(val));
+          setLoading(false);
+          return;
+        }
+      } catch(e) {}
+      var seed = { practicantes: INIT_PRACS, alumnos: [], citas: [], bloqueos: INIT_BLOQUEOS, asuetos: [] };
+      setData(seed);
+      try { localStorage.setItem(KEY, JSON.stringify(seed)); } catch(e) {}
+      setLoading(false);
+    }
+
+    init();
+    return function() { if (unsubscribe) unsubscribe(); if (loadTimer) clearTimeout(loadTimer); };
+  }, []);
+
+  var save = useCallback(async function(d) {
+    setData(d);
+    if (_dbRef.current) {
+      _skipSnap.current = true;
+      try { await _dbRef.current.doc("config/main").set(d); } catch(e) { console.error("save error:", e); }
+    } else {
+      try { localStorage.setItem(KEY, JSON.stringify(d)); } catch(e) {}
+    }
+  }, []);
+
+  function showToast(m) { setToastMsg(m); }
+
+  var stats = useMemo(function() {
+    var a = data.citas.filter(function(c) { return c.active; });
+    return { citas: a.length, als: data.alumnos.length, pracs: data.practicantes.length, bloqs: data.bloqueos.length };
+  }, [data]);
+
+  function resetAll() {
+
+    var seed = { practicantes: INIT_PRACS, alumnos: [], citas: [], bloqueos: INIT_BLOQUEOS };
+    save(seed);
+    showToast("Datos reiniciados");
+  }
+
+  function exportData() {
+    var json = JSON.stringify(data);
+    var success = copyText(json);
+    if (success) {
+      showToast("Datos copiados al portapapeles — pégalos en una nota o mensaje");
+    } else {
+      showToast("No se pudo copiar");
+    }
+  }
+
+  const [showImport, setShowImport] = useState(false);
+  const [importText, setImportText] = useState("");
+
+  var KARLA_ENTRY = {
+    id: "karla", name: "Psic. Karla Mitzary Aguilar Reyes",
+    schedule: {
+      "Lunes": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+      "Martes": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+      "Miércoles": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+      "Jueves": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"],
+      "Viernes": ["9:00","10:00","11:00","12:00","13:00","14:00","15:00"]
+    }, propiaOficina: true
+  };
+
+  var KARLA_BLOQUEOS = [
+    { id: "t03", type: "taller", name: "Métodos de Org. y Estudio", session: "Gpo2-S1", date: "2026-08-13", hour: "14:00", pIds: ["karla"] },
+    { id: "t04", type: "taller", name: "Métodos de Org. y Estudio", session: "Gpo2-S2", date: "2026-08-20", hour: "14:00", pIds: ["karla"] },
+    { id: "t07", type: "taller", name: "Manejo del Estrés", session: "Gpo2-S1", date: "2026-08-27", hour: "14:00", pIds: ["karla"] },
+    { id: "t08", type: "taller", name: "Manejo del Estrés", session: "Gpo2-S2", date: "2026-09-03", hour: "14:00", pIds: ["karla"] },
+    { id: "t11", type: "taller", name: "Inteligencia Emocional", session: "Gpo2-S1", date: "2026-09-10", hour: "14:00", pIds: ["karla"] },
+    { id: "t12", type: "taller", name: "Inteligencia Emocional", session: "Gpo2-S2", date: "2026-09-17", hour: "14:00", pIds: ["karla"] },
+    { id: "t14", type: "taller", name: "Ansiedad", session: "Gpo2-S1", date: "2026-09-24", hour: "14:00", pIds: ["karla"] },
+    { id: "t16", type: "taller", name: "Depresión", session: "Gpo2-S1", date: "2026-10-15", hour: "14:00", pIds: ["karla"] },
+    { id: "t18", type: "taller", name: "Duelo", session: "Gpo2-S1", date: "2026-10-22", hour: "14:00", pIds: ["karla"] },
+    { id: "t20", type: "taller", name: "Amor Propio y Autoestima", session: "Gpo2-S1", date: "2026-10-29", hour: "14:00", pIds: ["karla"] }
+  ];
+
+  function ensureKarla(imported) {
+    var hasKarla = imported.practicantes.some(function(p) { return p.id === "karla"; });
+    if (!hasKarla) {
+      imported.practicantes.unshift(KARLA_ENTRY);
+    }
+    var karlaBloqueoIds = KARLA_BLOQUEOS.map(function(b) { return b.id; });
+    var existingIds = imported.bloqueos.map(function(b) { return b.id; });
+    KARLA_BLOQUEOS.forEach(function(kb) {
+      if (!existingIds.includes(kb.id)) {
+        imported.bloqueos.push(kb);
+      }
+    });
+    return imported;
+  }
+
+  function parseImport() {
+    try {
+      var imported = JSON.parse(importText);
+      if (imported.practicantes && imported.alumnos && imported.citas && imported.bloqueos) {
+        if (!imported.asuetos) imported.asuetos = [];
+        imported = ensureKarla(imported);
+        return imported;
+      } else {
+        showToast("Datos no válidos");
+        return null;
+      }
+    } catch (err) {
+      showToast("Error: texto no es JSON válido");
+      return null;
+    }
+  }
+
+  function doImportReplace() {
+    var imported = parseImport();
+    if (!imported) return;
+    save(imported);
+    setShowImport(false);
+    setImportText("");
+    showToast("Datos reemplazados correctamente");
+  }
+
+  function doImportMerge() {
+    var imported = parseImport();
+    if (!imported) return;
+
+    var merged = JSON.parse(JSON.stringify(data));
+
+    var existPracIds = merged.practicantes.map(function(p) { return p.id; });
+    imported.practicantes.forEach(function(p) {
+      if (!existPracIds.includes(p.id)) {
+        merged.practicantes.push(p);
+      }
+    });
+
+    var alumnoMap = {};
+    merged.alumnos.forEach(function(a) { alumnoMap[a.id] = a; });
+    imported.alumnos.forEach(function(a) {
+      if (!alumnoMap[a.id]) {
+        merged.alumnos.push(a);
+        alumnoMap[a.id] = a;
+      } else {
+        var local = alumnoMap[a.id];
+        if (!local.telefono && a.telefono) local.telefono = a.telefono;
+        if (!local.email && a.email) local.email = a.email;
+        if (!local.motivo && a.motivo) local.motivo = a.motivo;
+      }
+    });
+
+    var citaMap = {};
+    merged.citas.forEach(function(c) { citaMap[c.id] = c; });
+    imported.citas.forEach(function(c) {
+      if (!citaMap[c.id]) {
+        merged.citas.push(c);
+        citaMap[c.id] = c;
+      } else {
+        var local = citaMap[c.id];
+        if ((c.faltas || 0) > (local.faltas || 0)) local.faltas = c.faltas;
+        var localReag = Array.isArray(local.reagendadas) ? local.reagendadas : [];
+        var impReag = Array.isArray(c.reagendadas) ? c.reagendadas : [];
+        var allReag = localReag.slice();
+        impReag.forEach(function(r) {
+          if (!allReag.includes(r)) allReag.push(r);
+        });
+        allReag.sort();
+        local.reagendadas = allReag;
+        var statusOrder = { "activa": 0, "sin cupo": 1, "reagendada": 1, "reactivada": 2, "alta": 3, "baja": 3, "canalizada": 3 };
+        var localOrd = statusOrder[local.status] || 0;
+        var impOrd = statusOrder[c.status] || 0;
+        if (impOrd > localOrd) {
+          local.status = c.status;
+          local.active = c.active;
+        }
+        if (!c.active && local.active && impOrd >= localOrd) {
+          local.active = false;
+          local.status = c.status;
+        }
+      }
+    });
+
+    var existBloqIds = merged.bloqueos.map(function(b) { return b.id; });
+    imported.bloqueos.forEach(function(b) {
+      if (!existBloqIds.includes(b.id)) {
+        merged.bloqueos.push(b);
+      }
+    });
+
+    if (!merged.asuetos) merged.asuetos = [];
+    var existAsuIds = merged.asuetos.map(function(a) { return a.id; });
+    (imported.asuetos || []).forEach(function(a) {
+      if (!existAsuIds.includes(a.id)) {
+        merged.asuetos.push(a);
+      }
+    });
+
+    merged = ensureKarla(merged);
+    save(merged);
+    setShowImport(false);
+    setImportText("");
+    showToast("Datos combinados ✓");
+  }
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <p className="text-sm text-gray-500">Cargando...</p>
+      </div>
+    );
+  }
+
+  var inactiveCount = data.citas.filter(function(c) { return !c.active; }).length;
+
+  var tabs = [
+    { id: "practicantes", icon: "👥", label: "Practicantes", n: stats.pracs },
+    { id: "alumnos", icon: "🎓", label: "Alumnos", n: stats.als },
+    { id: "bloqueos", icon: "🚫", label: "Bloqueos", n: stats.bloqs },
+    { id: "asignar", icon: "📅", label: "Asignar", n: 0 },
+    { id: "citas", icon: "📋", label: "Citas", n: stats.citas },
+    { id: "historial", icon: "📊", label: "Historial", n: stats.als }
+  ];
+
+  return (
+    <div className="min-h-screen" style={{ background: "#f7f8fa", fontFamily: "Inter, Segoe UI, system-ui, sans-serif" }}>
+      <div className="text-white px-5 py-4" style={{ background: "linear-gradient(135deg, #1F2A5C, #2d3a7c)" }}>
+        <div className="max-w-5xl mx-auto flex items-center justify-between">
+          <div>
+            <h1 className="text-lg font-bold tracking-tight">Sistema de Citas — DOP</h1>
+            <p className="text-xs opacity-70 mt-0.5">Departamento de Orientación Psicopedagógica · FCFM-UANL</p>
+          </div>
+          <div className="text-xs opacity-80 text-right">
+            <p>{stats.citas} cita(s) activa(s)</p>
+            <p>{stats.bloqs} bloqueo(s)</p>
+            <p>{_dbRef.current ? "\u2601\uFE0F Firebase" : "\uD83D\uDCBE Local"}</p>
+          </div>
+        </div>
+      </div>
+
+      <div className="border-b border-gray-200 bg-white sticky top-0 z-10">
+        <div className="max-w-5xl mx-auto flex overflow-x-auto">
+          {tabs.map(function(t) {
+            var isActive = tab === t.id;
+            return (
+              <button key={t.id} onClick={function() { setTab(t.id); }}
+                className={"flex items-center gap-1 px-3 py-3 text-sm font-medium border-b-2 cursor-pointer whitespace-nowrap " + (isActive ? "border-blue-600 text-blue-700" : "border-transparent text-gray-500 hover:text-gray-700")}>
+                <span>{t.icon}</span>
+                <span className="hidden sm:inline">{t.label}</span>
+                {t.n > 0 && <span className="ml-1 px-1.5 py-0.5 rounded-full bg-gray-100 text-gray-600" style={{ fontSize: 10 }}>{t.n}</span>}
+              </button>
+            );
+          })}
+          <div className="ml-auto flex items-center gap-1 pr-2">
+            <button onClick={exportData} className="text-xs text-gray-400 hover:text-blue-500 cursor-pointer px-2" title="Exportar datos">📤</button>
+            <button onClick={function() { setShowImport(true); }} className="text-xs text-gray-400 hover:text-green-500 cursor-pointer px-2" title="Importar datos">📥</button>
+            <ConfirmBtn onConfirm={resetAll} label="🔄" confirmLabel="¿Borrar todo?" />
+          </div>
+        </div>
+      </div>
+
+      <div className="max-w-5xl mx-auto px-4 py-5">
+        {tab === "practicantes" && <PracticantesTab data={data} onSave={save} toast={showToast} />}
+        {tab === "alumnos" && <AlumnosTab data={data} onSave={save} toast={showToast} />}
+        {tab === "bloqueos" && <BloqueosTab data={data} onSave={save} toast={showToast} />}
+        {tab === "asignar" && <AsignarTab data={data} onSave={save} toast={showToast} />}
+        {tab === "citas" && <CitasTab data={data} onSave={save} toast={showToast} />}
+        {tab === "historial" && <HistorialTab data={data} onSave={save} toast={showToast} />}
+      </div>
+
+      <Toast msg={toastMsg} onDone={function() { setToastMsg(""); }} />
+
+      <Modal open={showImport} onClose={function() { setShowImport(false); }} title="Importar datos">
+        <div className="space-y-3">
+          <p className="text-sm text-gray-600">Pega aquí los datos que copiaste con 📤 desde otro dispositivo:</p>
+          <textarea
+            value={importText}
+            onChange={function(e) { setImportText(e.target.value); }}
+            className="w-full border border-gray-300 rounded-lg px-3 py-2 text-xs font-mono h-32"
+            placeholder='Pega el texto aquí...'
+          ></textarea>
+          <div className="p-3 rounded-lg bg-blue-50 text-xs text-blue-800 space-y-1">
+            <p className="font-semibold">¿Qué modo usar?</p>
+            <p><strong>Combinar:</strong> Agrega alumnos, citas y bloqueos nuevos sin borrar lo que ya tienes. Si una cita existe en ambos, conserva la versión con más cambios (faltas, reagendadas, status).</p>
+            <p><strong>Reemplazar:</strong> Borra todo lo actual y lo sustituye con los datos pegados.</p>
+          </div>
+          <div className="flex justify-end gap-3">
+            <button onClick={function() { setShowImport(false); }} className="px-4 py-2 rounded-lg text-sm text-gray-600 hover:bg-gray-100 cursor-pointer">Cancelar</button>
+            <button onClick={doImportReplace} className="px-4 py-2 rounded-lg text-white text-sm font-medium cursor-pointer bg-red-500 hover:bg-red-600">Reemplazar</button>
+            <button onClick={doImportMerge} className="px-5 py-2 rounded-lg text-white text-sm font-medium cursor-pointer" style={{ background: "#1F2A5C" }}>Combinar ✓</button>
+          </div>
+        </div>
+      </Modal>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<PasswordGate><App /></PasswordGate>);
+  </script>
+</body>
+</html>
