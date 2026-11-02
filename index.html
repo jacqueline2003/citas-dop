@@ -320,7 +320,7 @@ function PasswordGate({ children }) {
           {!isSetup && (
             <input type="password" value={pw2} onChange={function(e) { setPw2(e.target.value); }}
               className="w-full border border-gray-300 rounded-lg p-3 mb-3 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-              placeholder="Confirmar contrase\u00f1a" />
+              placeholder="Confirmar contraseña" />
           )}
           {error && <p className="text-red-500 text-sm mb-3 text-center">{error}</p>}
           <button type="submit"
@@ -329,7 +329,7 @@ function PasswordGate({ children }) {
             {isSetup ? "Entrar" : "Crear contrase\u00f1a y entrar"}
           </button>
         </form>
-        <p className="text-xs text-gray-400 text-center mt-4">FCFM-UANL · Departamento de Orientaci\u00f3n Psicopedag\u00f3gica</p>
+        <p className="text-xs text-gray-400 text-center mt-4">FCFM-UANL · Departamento de Orientación Psicopedagógica</p>
       </div>
     </div>
   );
