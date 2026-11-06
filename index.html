@@ -1246,6 +1246,61 @@ function genNoAppointmentMsg(alName, conflictDateStr, nextDateStr, hour) {
   return lines.join("\n");
 }
 
+function genModalidadesMsg(alName) {
+  var lines = [
+    "Hola, buen día " + alName + ". Te contactamos del Departamento de Orientación Psicopedagógica de la FCFM.",
+    "",
+    "Queremos informarte sobre las opciones disponibles para darle seguimiento a tu proceso:",
+    "",
+    "1. Continuar tus sesiones en línea: las puedes tomar desde tu casa o, si lo prefieres, en una oficina del departamento (avísanos por este medio para abrirte el espacio).",
+    "",
+    "2. Si no deseas continuar, acude al departamento a firmar:",
+    "   • Hoja de canalización: para que te refieran a otro centro.",
+    "   • Hoja de alta: para concluir tu proceso este semestre.",
+    "",
+    "Por favor dinos qué opción prefieres.",
+    "",
+    "Quedamos a tus órdenes."
+  ];
+  return lines.join("\n");
+}
+
+function genOpcion1Msg(alName, dateStr, hour) {
+  var dia = fmtDateES(dateStr);
+  var hora = fmtH12(hour);
+  var lines = [
+    "Hola " + alName + ", gracias por tu respuesta.",
+    "",
+    "Tus sesiones en línea quedan programadas en el mismo día y horario que ya tenías asignado: los días " + dia + " a las " + hora + ".",
+    "",
+    "Te recordamos las siguientes indicaciones:",
+    "•\tContar con un espacio privado y tranquilo para tu sesión.",
+    "•\tTener buena conexión a internet.",
+    "•\tConectarte puntualmente a la hora de tu cita.",
+    "•\tEn caso de no poder asistir, reportarte 1 día antes por este medio. En caso de emergencia, reportarse el mismo día.",
+    "",
+    "Si prefieres tomar tu sesión desde una oficina del departamento, avísanos con anticipación para abrirte el espacio.",
+    "",
+    "Quedamos a tus órdenes."
+  ];
+  return lines.join("\n");
+}
+
+function genOpcion2Msg(alName, dateStr, hour) {
+  var dia = fmtDateES(dateStr);
+  var hora = fmtH12(hour);
+  var lines = [
+    "Hola " + alName + ", gracias por tu respuesta.",
+    "",
+    "Para continuar con tu proceso, es necesario que acudas al Departamento de Orientación Psicopedagógica a firmar tu hoja correspondiente.",
+    "",
+    "Te esperamos el día " + dia + " a las " + hora + ".",
+    "",
+    "Quedamos a tus órdenes."
+  ];
+  return lines.join("\n");
+}
+
 function findCitaConflicts(cita, bloqueos) {
   var dates = getWeeklyDates(cita.firstDate, 16);
   var conflicts = [];
@@ -1982,6 +2037,36 @@ function CitasTab({ data, onSave, toast }) {
                 </div>
               </div>
             )}
+
+            <hr className="border-gray-200" />
+
+            <div>
+              <h4 className="font-semibold text-sm mb-2" style={{ color: "#1F2A5C" }}>📢 Mensaje de modalidades (en línea / canalización / alta)</h4>
+              <p className="text-xs text-gray-500 mb-3">Envía el mensaje inicial para que el alumno elija su opción, luego copia la respuesta según lo que elija.</p>
+              <div className="space-y-3">
+                <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium text-gray-700">📩 Mensaje inicial — opciones disponibles</p>
+                    <CopyBtn text={genModalidadesMsg(modalAl.name)} label="Copiar" />
+                  </div>
+                  <pre className="text-xs whitespace-pre-wrap font-sans text-gray-600 leading-relaxed">{genModalidadesMsg(modalAl.name)}</pre>
+                </div>
+                <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium text-green-800">✅ Respuesta Opción 1 — Sesiones en línea</p>
+                    <CopyBtn text={genOpcion1Msg(modalAl.name, msgModal.day, msgModal.hour)} label="Copiar" />
+                  </div>
+                  <pre className="text-xs whitespace-pre-wrap font-sans text-green-700 leading-relaxed">{genOpcion1Msg(modalAl.name, msgModal.day, msgModal.hour)}</pre>
+                </div>
+                <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+                  <div className="flex items-center justify-between mb-2">
+                    <p className="text-sm font-medium text-amber-800">📝 Respuesta Opción 2 — Canalización / Alta</p>
+                    <CopyBtn text={genOpcion2Msg(modalAl.name, msgModal.day, msgModal.hour)} label="Copiar" />
+                  </div>
+                  <pre className="text-xs whitespace-pre-wrap font-sans text-amber-700 leading-relaxed">{genOpcion2Msg(modalAl.name, msgModal.day, msgModal.hour)}</pre>
+                </div>
+              </div>
+            </div>
 
             <hr className="border-gray-200" />
 
