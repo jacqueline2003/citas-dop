@@ -1265,12 +1265,17 @@ function genModalidadesMsg(alName) {
   return lines.join("\n");
 }
 
-function genOpcion1Msg(alName, dayName, hour) {
+function genOpcion1Msg(alName, dayName, hour, nextDateStr) {
   var hora = fmtH12(hour);
+  var proxima = "";
+  if (nextDateStr) {
+    var dd = new Date(nextDateStr + "T12:00:00");
+    proxima = DAY_MAP[dd.getDay()] + " " + dd.getDate() + " de " + MONTH_NAMES[dd.getMonth()];
+  }
   var lines = [
     "Hola " + alName + ", gracias por tu respuesta.",
     "",
-    "Tus sesiones en línea quedan programadas en el mismo día y horario que ya tenías asignado: los días " + dayName + " a las " + hora + ".",
+    "Tus sesiones en línea quedan programadas en el mismo día y horario que ya tenías asignado: los días " + dayName + " a las " + hora + "." + (proxima ? " Tu próxima sesión es el " + proxima + "." : ""),
     "",
     "Te recordamos las siguientes indicaciones:",
     "•\tContar con un espacio privado y tranquilo para tu sesión.",
@@ -2053,13 +2058,19 @@ function CitasTab({ data, onSave, toast }) {
                   </div>
                   <pre className="text-xs whitespace-pre-wrap font-sans text-gray-600 leading-relaxed">{genModalidadesMsg(modalAl.name)}</pre>
                 </div>
+                {(function() {
+                  var hoy = new Date().toISOString().slice(0, 10);
+                  var nextDate = modalDates.find(function(d) { return d >= hoy && !conflictDateSet[d]; }) || "";
+                  return (
                 <div className="bg-green-50 border border-green-200 rounded-lg p-3">
                   <div className="flex items-center justify-between mb-2">
                     <p className="text-sm font-medium text-green-800">✅ Respuesta Opción 1 — Sesiones en línea</p>
-                    <CopyBtn text={genOpcion1Msg(modalAl.name, msgModal.day, msgModal.hour)} label="Copiar" />
+                    <CopyBtn text={genOpcion1Msg(modalAl.name, msgModal.day, msgModal.hour, nextDate)} label="Copiar" />
                   </div>
-                  <pre className="text-xs whitespace-pre-wrap font-sans text-green-700 leading-relaxed">{genOpcion1Msg(modalAl.name, msgModal.day, msgModal.hour)}</pre>
+                  <pre className="text-xs whitespace-pre-wrap font-sans text-green-700 leading-relaxed">{genOpcion1Msg(modalAl.name, msgModal.day, msgModal.hour, nextDate)}</pre>
                 </div>
+                  );
+                })()}
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
                   <div className="mb-2">
                     <p className="text-sm font-medium text-amber-800">📝 Respuesta Opción 2 — Canalización / Alta</p>
