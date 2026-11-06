@@ -1265,13 +1265,12 @@ function genModalidadesMsg(alName) {
   return lines.join("\n");
 }
 
-function genOpcion1Msg(alName, dateStr, hour) {
-  var dia = fmtDateES(dateStr);
+function genOpcion1Msg(alName, dayName, hour) {
   var hora = fmtH12(hour);
   var lines = [
     "Hola " + alName + ", gracias por tu respuesta.",
     "",
-    "Tus sesiones en línea quedan programadas en el mismo día y horario que ya tenías asignado: los días " + dia + " a las " + hora + ".",
+    "Tus sesiones en línea quedan programadas en el mismo día y horario que ya tenías asignado: los días " + dayName + " a las " + hora + ".",
     "",
     "Te recordamos las siguientes indicaciones:",
     "•\tContar con un espacio privado y tranquilo para tu sesión.",
