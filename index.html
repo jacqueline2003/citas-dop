@@ -1275,7 +1275,7 @@ function genOpcion1Msg(alName, dayName, hour, nextDateStr) {
   var lines = [
     "Hola " + alName + ", gracias por tu respuesta.",
     "",
-    "Tus sesiones en línea quedan programadas en el mismo día y horario que ya tenías asignado: los días " + dayName + " a las " + hora + "." + (proxima ? " Tu próxima sesión es el " + proxima + "." : ""),
+    "Tus sesiones en línea quedan programadas en el mismo horario que ya tenías asignado." + (proxima ? " Tu próxima sesión es el " + proxima + " a las " + hora + "." : " Los días " + dayName + " a las " + hora + "."),
     "",
     "Te recordamos las siguientes indicaciones:",
     "•\tContar con un espacio privado y tranquilo para tu sesión.",
