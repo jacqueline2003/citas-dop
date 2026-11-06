@@ -1287,7 +1287,8 @@ function genOpcion1Msg(alName, dateStr, hour) {
 }
 
 function genOpcion2Msg(alName, dateStr, hour) {
-  var dia = fmtDateES(dateStr);
+  var dd = new Date(dateStr + "T12:00:00");
+  var dia = DAY_MAP[dd.getDay()] + " " + dd.getDate() + " de " + MONTH_NAMES[dd.getMonth()];
   var hora = fmtH12(hour);
   var lines = [
     "Hola " + alName + ", gracias por tu respuesta.",
@@ -1324,6 +1325,8 @@ function findCitaConflicts(cita, bloqueos) {
 
 function CitasTab({ data, onSave, toast }) {
   const [msgModal, setMsgModal] = useState(null);
+  const [op2Fecha, setOp2Fecha] = useState("");
+  const [op2Hora, setOp2Hora] = useState("");
   const [faltaModal, setFaltaModal] = useState(null);
   const [view, setView] = useState("list");
   const [search, setSearch] = useState("");
@@ -1884,7 +1887,7 @@ function CitasTab({ data, onSave, toast }) {
                 </div>
               </div>
               <div className="flex gap-1 shrink-0 flex-wrap justify-end">
-                <button onClick={function() { setMsgModal(c); }} className="px-2 py-1 text-xs rounded border border-blue-200 text-blue-600 hover:bg-blue-50 cursor-pointer" title="Mensajes">💬</button>
+                <button onClick={function() { setMsgModal(c); setOp2Fecha(""); setOp2Hora(""); }} className="px-2 py-1 text-xs rounded border border-blue-200 text-blue-600 hover:bg-blue-50 cursor-pointer" title="Mensajes">💬</button>
                 <button onClick={function() { setCambiarModal(c); setNuevoPrac(""); }} className="px-2 py-1 text-xs rounded border border-purple-200 text-purple-600 hover:bg-purple-50 cursor-pointer" title="Cambiar practicante">🔄</button>
                 <button onClick={function() { setReagendarModal(c); setReagendarMotivo("alumno"); }} className="px-2 py-1 text-xs rounded border border-indigo-200 text-indigo-600 hover:bg-indigo-50 cursor-pointer" title="Reagendar">📅</button>
                 <button onClick={function() { setFaltaModal(c); }} className="px-2 py-1 text-xs rounded border border-amber-200 text-amber-600 hover:bg-amber-50 cursor-pointer" title="Registrar falta">⚠</button>
@@ -2059,11 +2062,33 @@ function CitasTab({ data, onSave, toast }) {
                   <pre className="text-xs whitespace-pre-wrap font-sans text-green-700 leading-relaxed">{genOpcion1Msg(modalAl.name, msgModal.day, msgModal.hour)}</pre>
                 </div>
                 <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-                  <div className="flex items-center justify-between mb-2">
+                  <div className="mb-2">
                     <p className="text-sm font-medium text-amber-800">📝 Respuesta Opción 2 — Canalización / Alta</p>
-                    <CopyBtn text={genOpcion2Msg(modalAl.name, msgModal.day, msgModal.hour)} label="Copiar" />
                   </div>
-                  <pre className="text-xs whitespace-pre-wrap font-sans text-amber-700 leading-relaxed">{genOpcion2Msg(modalAl.name, msgModal.day, msgModal.hour)}</pre>
+                  <div className="flex flex-wrap gap-2 mb-3">
+                    <div className="flex-1 min-w-[140px]">
+                      <label className="block text-xs font-medium text-amber-700 mb-1">Fecha para firmar:</label>
+                      <input type="date" value={op2Fecha} onChange={function(e) { setOp2Fecha(e.target.value); }} className="w-full px-2 py-1.5 text-sm border border-amber-300 rounded bg-white focus:ring-2 focus:ring-amber-400 focus:border-amber-400" />
+                    </div>
+                    <div className="w-[120px]">
+                      <label className="block text-xs font-medium text-amber-700 mb-1">Hora:</label>
+                      <select value={op2Hora} onChange={function(e) { setOp2Hora(e.target.value); }} className="w-full px-2 py-1.5 text-sm border border-amber-300 rounded bg-white focus:ring-2 focus:ring-amber-400 focus:border-amber-400">
+                        <option value="">Seleccionar</option>
+                        {HOURS.map(function(h) { return <option key={h} value={h}>{fmtH12(h)}</option>; })}
+                      </select>
+                    </div>
+                  </div>
+                  {op2Fecha && op2Hora ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <p className="text-xs text-amber-600">Vista previa del mensaje:</p>
+                        <CopyBtn text={genOpcion2Msg(modalAl.name, op2Fecha, op2Hora)} label="Copiar" />
+                      </div>
+                      <pre className="text-xs whitespace-pre-wrap font-sans text-amber-700 leading-relaxed">{genOpcion2Msg(modalAl.name, op2Fecha, op2Hora)}</pre>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-amber-500 italic">Selecciona fecha y hora para ver el mensaje</p>
+                  )}
                 </div>
               </div>
             </div>
